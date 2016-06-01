@@ -1,19 +1,15 @@
-#include <cp3_llbb/TTWAnalysis/interface/Defines.h>
-#include <cp3_llbb/TTWAnalysis/interface/Types.h>
-#include <cp3_llbb/TTWAnalysis/interface/Tools.h>
-#include <cp3_llbb/TTWAnalysis/interface/GenStatusFlags.h>
-#include <cp3_llbb/TTWAnalysis/interface/TTWAnalyzer.h>
-#include <cp3_llbb/TTWAnalysis/interface/TTWDileptonCategory.h>
+//#include <cp3_llbb/TTWAnalysis/interface/Defines.h>
+// #define _TT_DEBUG_
+#define TT_MTT_DEBUG (false)
+#define TT_HLT_DEBUG (false)
+#include "cp3_llbb/TTWAnalysis/interface/TTWAnalyzer.h"
+#include "cp3_llbb/TTWAnalysis/interface/TTWDileptonCategory.h"
 
-#include <cp3_llbb/Framework/interface/MuonsProducer.h>
-#include <cp3_llbb/Framework/interface/ElectronsProducer.h>
-#include <cp3_llbb/Framework/interface/JetsProducer.h>
 #include <cp3_llbb/Framework/interface/METProducer.h>
 #include <cp3_llbb/Framework/interface/HLTProducer.h>
-#include <cp3_llbb/Framework/interface/GenParticlesProducer.h>
 
 #include <Math/PtEtaPhiE4D.h>
-#include <Math/LorentzVector.h>
+// #include <Math/LorentzVector.h>
 #include <Math/VectorUtil.h>
 
 // To access VectorUtil::DeltaR() more easily
@@ -21,139 +17,266 @@ using namespace ROOT::Math;
 
 using namespace TTWAnalysis;
 
+using ElectronHybridCut = StringCutObjectSelector<pat::Electron>;
+using MuonHybridCut     = StringCutObjectSelector<pat::Muon>;
+using JetHybridCut      = StringCutObjectSelector<pat::Jet>;
+
+namespace {
+  template<typename _Value,typename _InputIterator,typename _UnaryFunction>
+  _Value min_value( _InputIterator __first, _InputIterator __last, _UnaryFunction&& __fun )
+  {
+    using _ElmArg = typename std::iterator_traits<_InputIterator>::reference;
+    return std::accumulate(__first, __last, std::numeric_limits<_Value>::max(),
+        [&__fun] (_Value __iv, _ElmArg __elm) -> _Value {
+          _Value __ov = std::forward<_UnaryFunction>(__fun)(__elm);
+          return ( __iv > __ov ) ? __ov : __iv;
+        });
+  }
+
+  template<typename _Arg,typename _UnaryFunction>
+  struct _LessOf {
+    public:
+      _LessOf(_UnaryFunction fun) : m_fun(fun) {}
+      bool operator() ( const _Arg& __a, const _Arg& __b ) const
+      {
+        return m_fun(__a) < m_fun(__b);
+      }
+    private:
+      _UnaryFunction m_fun;
+  };
+  // factory method
+  template<typename _Arg,typename _UnaryFunction>
+  _LessOf<_Arg,_UnaryFunction> LessOf( _UnaryFunction __fun )
+  { return _LessOf<_Arg,_UnaryFunction>(std::forward<_UnaryFunction>(__fun)); }
+
+  template<typename _Arg,typename _UnaryFunction>
+  struct _MoreOf {
+    public:
+      _MoreOf(_UnaryFunction fun) : m_fun(fun) {}
+      bool operator() ( const _Arg& __a, const _Arg& __b ) const
+      {
+        return m_fun(__a) > m_fun(__b);
+      }
+    private:
+      _UnaryFunction m_fun;
+  };
+  // factory method
+  template<typename _Arg,typename _UnaryFunction>
+  _MoreOf<_Arg,_UnaryFunction> MoreOf( _UnaryFunction __fun )
+  { return _MoreOf<_Arg,_UnaryFunction>(std::forward<_UnaryFunction>(__fun)); }
+
+
+  float minDRjl( const std::vector<Lepton>& leptons, const indexlist_t& lIdxs, const pat::Jet& j )
+  {
+    return min_value<float>(std::begin(lIdxs), std::end(lIdxs),
+        [j,leptons] ( index_t iL ) { return VectorUtil::DeltaR(j.p4(), leptons[iL].p4()); });
+  }
+
+  float minDRjl( const std::vector<Lepton>& leptons, const indexlist_t& lIdxs, const DiJet& jj )
+  {
+    return std::min(minDRjl(leptons, lIdxs, *(jj.first)), minDRjl(leptons, lIdxs, *(jj.second)));
+  }
+
+  LeptonCut makeLeptonCut( const edm::ParameterSet& cutPerFlavour )
+  {
+    return LeptonCut{
+        ElectronHybridCut{cutPerFlavour.getParameter<std::string>("Electron")}
+      , MuonHybridCut    {cutPerFlavour.getParameter<std::string>("Muon"    )}
+    };
+  }
+  DiLeptonCut makeDiLeptonCut( const edm::ParameterSet& cutPerLepton )
+  {
+    return DiLeptonCut{
+        makeLeptonCut(cutPerLepton.getParameter<edm::ParameterSet>("Leading"))
+      , makeLeptonCut(cutPerLepton.getParameter<edm::ParameterSet>("SubLeading"))
+    };
+  }
+  std::pair<std::string,JetCut> makeJetCut( const edm::ParameterSet& config )
+  {
+    return std::make_pair(config.getParameter<std::string>("LeptonWP")
+        , JetHybridCut{config.getParameter<std::string>("Selection")});
+  }
+  std::pair<std::string,DiJetCut> makeDiJetCut( const edm::ParameterSet& config )
+  {
+    return std::make_pair(config.getParameter<std::string>("LeptonWP"), DiJetCut{
+        JetHybridCut{config.getParameter<std::string>("Leading")}
+      , JetHybridCut{config.getParameter<std::string>("SubLeading")}});
+  }
+}
+
 float TTWAnalysis::DeltaEta(const myLorentzVector& v1, const myLorentzVector& v2) {
   return std::abs(v1.Eta() - v2.Eta());
 }
 
-void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup, const ProducersManager& producers, const AnalyzersManager& analyzers, const CategoryManager& categories) {
+TTWAnalyzer::TTWAnalyzer(const std::string& name, const ROOT::TreeGroup& tree_, const edm::ParameterSet& config)
+  : Analyzer(name, tree_, config),
+
+  // Not untracked as these parameters are mandatory
+  m_electrons_producer(config.getParameter<std::string>("electronsProducer")),
+  m_muons_producer(config.getParameter<std::string>("muonsProducer")),
+  m_jets_producer(config.getParameter<std::string>("jetsProducer")),
+  m_met_producer(config.getParameter<std::string>("metProducer")),
+
+  m_elWP{}, m_muWP{}, m_lWP{}, m_llWP{}, m_bWP{}, m_bbWP{}, m_lljjWP{}, m_llbbWP{}, m_llbbmWP{},
+  m_idxElWP{}, m_idxMuWP{}, m_idxlWP{}, m_idxllWP{}, m_idxjDRWP{}, m_idxbDRWP_PT{}, m_idxbDRWP_tag{}, m_idxjjDRWP{}, m_idxbbDRWP_PT{}, m_idxbbDRWP_tag{}, m_idxlljjDRWP{}, m_idxllbbDRWP_PT{}, m_idxllbbDRWP_tag{}, m_idxlljjmDRWP{}, m_idxllbbmDRWP_PT{}, m_idxllbbmDRWP_tag{},
+
+  m_electronPtCut( config.getUntrackedParameter<double>("electronPtCut", 20) ),
+  m_electronEtaCut( config.getUntrackedParameter<double>("electronEtaCut", 2.5) ),
+
+  m_muonPtCut( config.getUntrackedParameter<double>("muonPtCut", 20) ),
+  m_muonEtaCut( config.getUntrackedParameter<double>("muonEtaCut", 2.4) ),
+
+  m_jetPtCut( config.getUntrackedParameter<double>("jetPtCut", 30) ),
+  m_jetEtaCut( config.getUntrackedParameter<double>("jetEtaCut", 2.5) ),
+  m_jetPUID( config.getUntrackedParameter<double>("jetPUID", std::numeric_limits<float>::min()) ),
+  m_jetDRleptonCut( config.getUntrackedParameter<double>("jetDRleptonCut", 0.3) ),
+
+  m_jetBTagName( config.getUntrackedParameter<std::string>("bTagName", "pfCombinedInclusiveSecondaryVertexV2BJetTags") ),
+
+  m_hltDRCut( config.getUntrackedParameter<double>("hltDRCut", std::numeric_limits<float>::max()) ),
+  m_hltDPtCut( config.getUntrackedParameter<double>("hltDPtCut", std::numeric_limits<float>::max()) )
+{
+  const auto& elWPCfg = config.getParameter<edm::ParameterSet>("ElectronWP");
+  for ( const auto elWPName : elWPCfg.getParameterNames() ) {
+    m_elWP[elWPName] = ElectronHybridCut{config.getParameter<std::string>(elWPName)};
+  }
+  m_idxElWP = IdxListForWPsHolder<decltype(m_elWP)>(m_elWP, tree_, "electrons_");
+  const auto& muWPCfg = config.getParameter<edm::ParameterSet>("MuonWP");
+  for ( const auto muWPName : muWPCfg.getParameterNames() ) {
+    m_muWP[muWPName] = MuonHybridCut{config.getParameter<std::string>(muWPName)};
+  }
+  m_idxMuWP = IdxListForWPsHolder<decltype(m_muWP)>(m_muWP, tree_, "muons_");
+
+  const auto& leptonWPCfg = config.getParameter<edm::ParameterSet>("LeptonWP");
+  for ( const auto leptonWPName : leptonWPCfg.getParameterNames() ) {
+    m_lWP[leptonWPName] = makeLeptonCut(leptonWPCfg.getParameter<edm::ParameterSet>(leptonWPName));
+  }
+  m_idxlWP = IdxListForWPsHolder<decltype(m_lWP)>(m_lWP, tree, "leptons_");
+
+  const auto& llWPCfg = config.getParameter<edm::ParameterSet>("DiLeptonWP");
+  for ( const auto llWPName : llWPCfg.getParameterNames() ) {
+    m_llWP[llWPName] = makeDiLeptonCut(llWPCfg.getParameter<edm::ParameterSet>(llWPName));
+  }
+  m_idxllWP = IdxListForWPsHolder<decltype(m_llWP)>(m_llWP, tree, "dileptons_");
+
+  m_jetIDCut = JetHybridCut{config.getParameter<std::string>("JetID")};
+
+  m_idxjDRWP = IdxListForWPsHolder<decltype(m_lWP)>(m_lWP, tree, "selJets_selID_DRCut_");
+  m_idxjjDRWP = IdxListForWPsHolder<decltype(m_lWP)>(m_lWP, tree, "diJets_DRCut_");
+
+  const auto& bWPCfg = config.getParameter<edm::ParameterSet>("BtagWP");
+  for ( const auto & bWPName : bWPCfg.getParameterNames() ) {
+    m_bWP[bWPName] = makeJetCut(bWPCfg.getParameter<edm::ParameterSet>(bWPName));
+  }
+  m_idxbDRWP_PT  = IdxListForWPsHolder<decltype(m_bWP)>(m_bWP, tree, "selBJets_DRCut_BWP_PtOrdered_");
+  m_idxbDRWP_tag = IdxListForWPsHolder<decltype(m_bWP)>(m_bWP, tree, "selBJets_DRCut_BWP_tagOrdered_");
+
+  const auto& bbWPCfg = config.getParameter<edm::ParameterSet>("DiBtagWP");
+  for ( const auto& bbWPName : bbWPCfg.getParameterNames() ) {
+    m_bbWP[bbWPName] = makeDiJetCut(bbWPCfg.getParameter<edm::ParameterSet>(bbWPName));
+  }
+  m_idxbbDRWP_PT  = IdxListForWPsHolder<decltype(m_bbWP)>(m_bbWP, tree, "diBJets_DRCut_BWP_PtOrdered_");
+  m_idxbbDRWP_tag = IdxListForWPsHolder<decltype(m_bbWP)>(m_bbWP, tree, "diBJets_DRCut_BWP_tagOrdered_");
+}
+
+void TTWAnalyzer::doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
+{
+  m_vertices_token = collector.consumes<std::vector<reco::Vertex>>(config.getUntrackedParameter<edm::InputTag>("vertices", edm::InputTag("offlineSlimmedPrimaryVertices")));
+}
+
+void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup, const ProducersManager& producers, const AnalyzersManager& analyzers, const CategoryManager& categories)
+{
+  using namespace TTWAnalysis;
+
+  m_electrons.clear(); m_muons.clear(); m_leptons.clear(); m_dileptons.clear(); m_jets.clear(); m_dijets.clear(); m_dileptondijets.clear(); m_dileptondijetmets.clear();
 
   #ifdef _TT_DEBUG_
-    std::cout << "Begin event." << std::endl;
+  std::cout << "Begin event." << std::endl;
   #endif
 
-  // Initizalize vectors depending on IDs/WPs to the right lengths
-  // Only a resize() is needed (and no assign()), since TreeWrapper clears the vectors after each event.
-
-  electrons_IDIso.resize( LepID::Count * LepIso::Count );
-  muons_IDIso.resize( LepID::Count * LepIso::Count );
-  leptons_IDIso.resize( LepID::Count * LepIso::Count );
-
-  diLeptons_IDIso.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count );
-
-  selJets_selID_DRCut.resize( LepID::Count * LepIso::Count );
-  selBJets_DRCut_BWP_PtOrdered.resize( LepID::Count * LepIso::Count * BWP::Count );
-  selBJets_DRCut_BWP_CSVv2Ordered.resize( LepID::Count * LepIso::Count * BWP::Count );
-
-  diJets_DRCut.resize( LepID::Count * LepIso::Count );
-  diBJets_DRCut_BWP_PtOrdered.resize( LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-  diBJets_DRCut_BWP_CSVv2Ordered.resize( LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-
-  diLepDiJets_DRCut.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count );
-  diLepDiBJets_DRCut_BWP_PtOrdered.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-  diLepDiBJets_DRCut_BWP_CSVv2Ordered.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-
-  diLepDiJetsMet_DRCut.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count );
-  diLepDiBJetsMet_DRCut_BWP_PtOrdered.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-  diLepDiBJetsMet_DRCut_BWP_CSVv2Ordered.resize( LepID::Count * LepIso::Count * LepID::Count * LepIso::Count * BWP::Count * BWP::Count );
-
-  gen_matched_b.resize( LepID::Count * LepIso::Count , -1);
-  gen_matched_b_beforeFSR.resize( LepID::Count * LepIso::Count , -1);
-  gen_matched_bbar.resize( LepID::Count * LepIso::Count , -1);
-  gen_matched_bbar_beforeFSR.resize( LepID::Count * LepIso::Count , -1);
-  gen_b_deltaR.resize( LepID::Count * LepIso::Count );
-  gen_b_beforeFSR_deltaR.resize( LepID::Count * LepIso::Count );
-  gen_bbar_deltaR.resize( LepID::Count * LepIso::Count );
-  gen_bbar_beforeFSR_deltaR.resize( LepID::Count * LepIso::Count );
+  // get the primary vertex
+  edm::Handle<std::vector<reco::Vertex>> vertices_handle;
+  event.getByToken(m_vertices_token, vertices_handle);
+  const reco::Vertex& pv = (*vertices_handle)[0];
 
   ///////////////////////////
-  //       ELECTRONS       //
+  //        LEPTONS        //
   ///////////////////////////
+
+  m_leptons.clear();
 
   #ifdef _TT_DEBUG_
-    std::cout << "Electrons" << std::endl;
+  std::cout << "Electrons" << std::endl;
   #endif
 
-  const ElectronsProducer& electrons = producers.get<ElectronsProducer>(m_electrons_producer);
-
-  for(uint16_t ielectron = 0; ielectron < electrons.p4.size(); ielectron++){
-    if( electrons.p4[ielectron].Pt() > m_electronPtCut && std::abs(electrons.p4[ielectron].Eta()) < m_electronEtaCut ){
-
-      Lepton m_lepton(
-          electrons.p4[ielectron],
-          ielectron,
-          electrons.charge[ielectron],
-          true, false,
-          electrons.ids[ielectron][m_electronVetoIDName],
-          electrons.ids[ielectron][m_electronLooseIDName],
-          electrons.ids[ielectron][m_electronMediumIDName],
-          electrons.ids[ielectron][m_electronTightIDName],
-          electrons.relativeIsoR03_withEA[ielectron]
-      );
-
-      for(const LepID::LepID& id: LepID::it){
-        for(const LepIso::LepIso& iso: LepIso::it){ // loop over Iso not really needed since not considered for electrons (for the moment)
-          uint16_t idx = LepIDIso(id, iso);
-          if( m_lepton.ID[id] && m_lepton.iso[iso] )
-            electrons_IDIso[idx].push_back(ielectron);
-        }
+  using ElectronsProducer = TTWAnalysis::CandidatesProducer<pat::Electron>;
+  m_electrons = producers.get<ElectronsProducer>(m_electrons_producer).selected();
+  for ( std::size_t i{0}; m_electrons.size() != i; ++i ) {
+    auto iEl = m_electrons[i];
+    if ( ( iEl->pt() > m_electronPtCut ) && ( std::abs(iEl->eta()) < m_electronEtaCut ) ) {
+      m_leptons.emplace_back(i, iEl);
+    }
+  }
+  for ( decltype(m_idxElWP)::iterator ielWP{m_idxElWP.begin()}; m_idxElWP.end() != ielWP; ++ielWP ) {
+    for ( std::size_t i{0}; m_electrons.size() != i; ++i ) {
+      if ( ielWP.cut()(*(m_electrons[i])) ) {
+        ielWP.idxList()->push_back(i);
       }
+    }
+  }
 
-      leptons.push_back(m_lepton);
+  #ifdef _TT_DEBUG_
+  std::cout << "Muons" << std::endl;
+  #endif
+
+  using MuonsProducer = TTWAnalysis::CandidatesProducer<pat::Muon>;
+  m_muons = producers.get<MuonsProducer>(m_muons_producer).selected();
+  for ( std::size_t i{0}; m_muons.size() != i; ++i ) {
+    const auto iMu = m_muons[i];
+    if ( ( iMu->pt() > m_muonPtCut ) && ( std::abs(iMu->eta()) < m_muonEtaCut ) ) {
+      m_leptons.emplace_back(i, iMu);
+    }
+    const_cast<pat::Muon*>(iMu.get())->addUserInt("tightMuonID", iMu->isTightMuon(pv)); // TODO consider putting this elsewhere
+  }
+  for ( decltype(m_idxMuWP)::iterator imuWP{m_idxMuWP.begin()}; m_idxMuWP.end() != imuWP; ++imuWP ) {
+    for ( std::size_t i{0}; m_muons.size() != i; ++i ) {
+      if ( imuWP.cut()(*(m_muons[i])) ) {
+        imuWP.idxList()->push_back(i);
+      }
+    }
+  }
+
+  std::sort(m_leptons.begin(), m_leptons.end(), MoreOf<const Lepton&>([] ( const Lepton& l ) { return l.recoCand()->pt(); }));
+
+  for ( decltype(m_idxlWP)::iterator ilWP{m_idxlWP.begin()}; m_idxlWP.end() != ilWP; ++ilWP ) {
+    for ( std::size_t iL{0}; m_leptons.size() != iL; ++iL ) {
+      if ( ilWP.cut()(m_leptons[iL]) ) {
+        ilWP.idxList()->push_back(iL);
+      }
     }
   }
 
   ///////////////////////////
-  //       MUONS           //
+  //       TRIGGER         //
   ///////////////////////////
-
   #ifdef _TT_DEBUG_
-    std::cout << "Muons" << std::endl;
+  std::cout << "Trigger" << std::endl;
   #endif
-
-  const MuonsProducer& muons = producers.get<MuonsProducer>(m_muons_producer);
-
-  for(uint16_t imuon = 0; imuon < muons.p4.size(); imuon++){
-    if(muons.p4[imuon].Pt() > m_muonPtCut && std::abs(muons.p4[imuon].Eta()) < m_muonEtaCut ){
-
-      Lepton m_lepton(
-          muons.p4[imuon],
-          imuon,
-          muons.charge[imuon],
-          false, true,
-          muons.isLoose[imuon], // isVeto => for muons, re-use isLoose
-          muons.isLoose[imuon],
-          muons.isMedium[imuon],
-          muons.isTight[imuon],
-          muons.relativeIsoR04_deltaBeta[imuon],
-          muons.relativeIsoR04_deltaBeta[imuon] < m_muonLooseIsoCut,
-          muons.relativeIsoR04_deltaBeta[imuon] < m_muonTightIsoCut
-      );
-
-      for(const LepID::LepID& id: LepID::it){
-        for(const LepIso::LepIso& iso: LepIso::it){
-          uint16_t idx = LepIDIso(id, iso);
-          if( m_lepton.ID[id] && m_lepton.iso[iso] )
-            muons_IDIso[idx].push_back(imuon);
-        }
+  if (producers.exists("hlt")) {
+    const HLTProducer& hlt = producers.get<HLTProducer>("hlt");
+    if (hlt.paths.empty()) {
+#if TT_HLT_DEBUG
+      std::cout << "No HLT path triggered for this event. Skipping HLT matching." << std::endl;
+#endif
+    } else {
+#if TT_HLT_DEBUG
+      std::cout << "HLT path triggered for this event:" << std::endl;
+      for (const std::string& path: hlt.paths) {
+        std::cout << "\t" << path << std::endl;
       }
-
-      leptons.push_back(m_lepton);
-    }
-  }
-
-  // Sort the leptons vector according to Pt
-  std::sort(leptons.begin(), leptons.end(), [](const Lepton& a, const Lepton &b){ return a.p4.Pt() > b.p4.Pt(); });
-
-  // Store indices to leptons for each ID/Iso combination
-  for(uint16_t idx = 0; idx < leptons.size(); idx++){
-    for(const LepID::LepID& id: LepID::it){
-      for(const LepIso::LepIso& iso: LepIso::it){
-
-        uint16_t comb = LepIDIso(id, iso);
-        const Lepton& m_lepton = leptons[idx];
-        if(m_lepton.ID[id] && m_lepton.iso[iso])
-          leptons_IDIso[comb].push_back(idx);
-
+#endif
+      for ( auto& lepton : m_leptons ) {
+        lepton.hlt_idx = matchOfflineLepton(lepton, hlt);
       }
     }
   }
@@ -163,71 +286,24 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   ///////////////////////////
 
   #ifdef _TT_DEBUG_
-    std::cout << "Dileptons" << std::endl;
+  std::cout << "Dileptons" << std::endl;
   #endif
 
-  for(uint16_t i1 = 0; i1 < leptons.size(); i1++){
-    for(uint16_t i2 = i1 + 1; i2 < leptons.size(); i2++){
-      const Lepton& l1 = leptons[i1];
-      const Lepton& l2 = leptons[i2];
+  for(uint16_t i1 = 0; i1 < m_leptons.size(); i1++) {
+    for(uint16_t i2 = i1 + 1; i2 < m_leptons.size(); i2++) {
+      const Lepton& l1 = m_leptons[i1];
+      const Lepton& l2 = m_leptons[i2];
 
-      DiLepton m_diLepton;
-
-      m_diLepton.p4 = l1.p4 + l2.p4;
-      m_diLepton.idxs = std::make_pair(l1.idx, l2.idx);
-      m_diLepton.lidxs = std::make_pair(i1, i2);
-      m_diLepton.isElEl = l1.isEl && l2.isEl;
-      m_diLepton.isElMu = l1.isEl && l2.isMu;
-      m_diLepton.isMuEl = l1.isMu && l2.isEl;
-      m_diLepton.isMuMu = l1.isMu && l2.isMu;
-      m_diLepton.isOS = l1.charge != l2.charge;
-      m_diLepton.isSF = m_diLepton.isElEl || m_diLepton.isMuMu;
-
-      // Save the combination of IDs
-      for(const LepID::LepID& id1: LepID::it){
-        for(const LepID::LepID& id2: LepID::it){
-          uint16_t idx = LepLepID(id1, id2);
-          m_diLepton.ID[idx] = l1.ID[id1] && l2.ID[id2];
-        }
-      }
-
-      // Save the combination of isolations
-      for(const LepIso::LepIso& iso1: LepIso::it){
-        for(const LepIso::LepIso& iso2: LepIso::it){
-          uint16_t idx = LepLepIso(iso1, iso2);
-          m_diLepton.iso[idx] = l1.iso[iso1] && l2.iso[iso2];
-        }
-      }
-
-      m_diLepton.DR = VectorUtil::DeltaR(l1.p4, l2.p4);
-      m_diLepton.DEta = TTWAnalysis::DeltaEta(l1.p4, l2.p4);
-      m_diLepton.DPhi = VectorUtil::DeltaPhi(l1.p4, l2.p4);
-
-      diLeptons.push_back(m_diLepton);
+      m_dileptons.emplace_back(i1,l1,i2,l2);
     }
   }
 
-  // Save indices to DiLeptons for the combinations of IDs & Isolationss
-  for(uint16_t i = 0; i < diLeptons.size(); i++){
-    const DiLepton& m_diLepton = diLeptons[i];
-
-    for(const LepID::LepID& id1: LepID::it){
-      for(const LepID::LepID& id2: LepID::it){
-        for(const LepIso::LepIso& iso1: LepIso::it){
-          for(const LepIso::LepIso& iso2: LepIso::it){
-
-            uint16_t idx_ids = LepLepID(id1, id2);
-            uint16_t idx_isos = LepLepIso(iso1, iso2);
-            uint16_t idx_comb = LepLepIDIso(id1, iso1, id2, iso2);
-
-            if(m_diLepton.ID[idx_ids] && m_diLepton.iso[idx_isos])
-              diLeptons_IDIso[idx_comb].push_back(i);
-
-          }
-        }
+  for ( decltype(m_idxllWP)::iterator illWP{m_idxllWP.begin()}; m_idxllWP.end() != illWP; ++illWP ) {
+    for ( std::size_t iLL{0}; m_dileptons.size() != iLL; ++iLL ) {
+      if ( illWP.cut()(m_dileptons[iLL]) ) {
+        illWP.idxList()->push_back(iLL);
       }
     }
-
   }
 
   ///////////////////////////
@@ -235,74 +311,45 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   ///////////////////////////
 
   #ifdef _TT_DEBUG_
-    std::cout << "Jets" << std::endl;
+  std::cout << "Jets" << std::endl;
   #endif
 
-  const JetsProducer& jets = producers.get<JetsProducer>(m_jets_producer);
+  using JetsProducer = TTWAnalysis::CandidatesProducer<pat::Jet>;
+  const auto& jets = producers.get<JetsProducer>(m_jets_producer).selected();
+  // std::cout << "Retrieved " << jets.size() << " jets" << std::endl;
+  for ( std::size_t i{0}; jets.size() != i; ++i ) {
+    if ( ( jets[i]->pt() > m_jetPtCut ) && ( std::abs(jets[i]->eta()) < m_jetEtaCut ) ) {
+      m_jets.push_back(jets[i]);
+    }
+  }
+  indexlist_t selJets_selID;
+  for ( std::size_t iJ{0}; m_jets.size() != iJ; ++iJ ) {
+    if ( m_jetIDCut(*(m_jets[iJ])) ) {
+      selJets_selID.push_back(iJ);
+    }
+  }
+  // std::cout << "Selected " << selJets_selID.size() << " jets (after jet ID)" << std::endl;
 
-  // First find the jets passing kinematic cuts and save them as Jet objects
-
-  uint16_t jetCounter(0);
-  for(uint16_t ijet = 0; ijet < jets.p4.size(); ijet++){
-    // Save the jets that pass the kinematic cuts
-    if (std::abs(jets.p4[ijet].Eta()) < m_jetEtaCut && jets.p4[ijet].Pt() > m_jetPtCut){
-      Jet m_jet;
-
-      m_jet.p4 = jets.p4[ijet];
-      m_jet.idx = ijet;
-      m_jet.ID[JetID::L] = jets.passLooseID[ijet];
-      m_jet.ID[JetID::T] = jets.passTightID[ijet];
-      m_jet.ID[JetID::TLV] = jets.passTightLeptonVetoID[ijet];
-      m_jet.CSVv2 = jets.getBTagDiscriminant(ijet, m_jetCSVv2Name);
-      m_jet.BWP[BWP::L] = m_jet.CSVv2 > m_jetCSVv2L;
-      m_jet.BWP[BWP::M] = m_jet.CSVv2 > m_jetCSVv2M;
-      m_jet.BWP[BWP::T] = m_jet.CSVv2 > m_jetCSVv2T;
-
-      // Save minimal DR(l,j) using selected leptons, for each Lepton ID/Iso
-      for(const LepID::LepID& id: LepID::it){
-        for(const LepIso::LepIso& iso: LepIso::it){
-
-          uint16_t idx_comb = LepIDIso(id, iso);
-
-          for(const uint16_t& lepIdx: leptons_IDIso[idx_comb]){
-            const Lepton& m_lepton = leptons[lepIdx];
-            float DR = (float) VectorUtil::DeltaR(jets.p4[ijet], m_lepton.p4);
-            if( DR < m_jet.minDRjl_lepIDIso[idx_comb] )
-              m_jet.minDRjl_lepIDIso[idx_comb] = DR;
-          }
-
-          // Save the indices to Jets passing the selected jetID and minDRjl > cut for this lepton ID/Iso
-          if( m_jet.minDRjl_lepIDIso[idx_comb] > m_jetDRleptonCut && jetIDAccessor(jets, ijet, m_jetID) ){
-            selJets_selID_DRCut[idx_comb].push_back(jetCounter);
-
-            // Out of these, save the indices for different b-tagging working points
-            for(const BWP::BWP& wp: BWP::it){
-              uint16_t idx_comb_b = LepIDIsoJetBWP(id, iso, wp);
-              if ((m_jet.BWP[wp]) && (std::abs(m_jet.p4.Eta()) < m_bJetEtaCut))
-                selBJets_DRCut_BWP_PtOrdered[idx_comb_b].push_back(jetCounter);
-            }
-          }
-        }
+  for ( decltype(m_idxjDRWP)::iterator iWP{m_idxjDRWP.begin()}; m_idxjDRWP.end() != iWP; ++iWP ) {
+    for ( auto iJ : selJets_selID ) {
+      if ( minDRjl(m_leptons, *(m_idxlWP.at(iWP.index()).idxList()), m_jets[iJ]) > m_jetDRleptonCut ) {
+        iWP.idxList()->push_back(iJ);
       }
-
-      if(jetIDAccessor(jets, ijet, m_jetID)) // Save the indices to Jets passing the selected jet ID
-        selJets_selID.push_back(jetCounter);
-
-      selJets.push_back(m_jet);
-
-      jetCounter++;
+    }
+  }
+  for ( decltype(m_idxbDRWP_PT)::iterator iWP{m_idxbDRWP_PT.begin()}; m_idxbDRWP_PT.end() != iWP; ++iWP ) {
+    for ( auto iJ : *(m_idxjDRWP.find(iWP.cut().first).idxList()) ) {
+      if ( iWP.cut().second(m_jets[iJ]) ) {
+        iWP.idxList()->push_back(iJ);
+      }
     }
   }
 
-  // Sort the b-jets according to decreasing CSVv2 value
-  selBJets_DRCut_BWP_CSVv2Ordered = selBJets_DRCut_BWP_PtOrdered;
-  for(const LepID::LepID& id: LepID::it){
-    for(const LepIso::LepIso& iso: LepIso::it){
-      for(const BWP::BWP& wp: BWP::it){
-        uint16_t idx_comb_b = LepIDIsoJetBWP(id, iso, wp);
-        std::sort(selBJets_DRCut_BWP_CSVv2Ordered[idx_comb_b].begin(), selBJets_DRCut_BWP_CSVv2Ordered[idx_comb_b].end(), jetBTagDiscriminantSorter(jets, m_jetCSVv2Name, selJets));
-      }
-    }
+  for ( std::size_t i{0}; m_idxbDRWP_PT.size() != i; ++i ) {
+    indexlist_t& tagIdx = *(m_idxbDRWP_tag.at(i).idxList());
+    tagIdx = *(m_idxbDRWP_PT.at(i).idxList());
+    std::stable_sort(std::begin(tagIdx), std::end(tagIdx),
+        MoreOf<index_t>([this] ( index_t iJ ) { return m_jets[iJ]->bDiscriminator(m_jetBTagName); }) );
   }
 
   ///////////////////////////
@@ -310,79 +357,40 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   ///////////////////////////
 
   #ifdef _TT_DEBUG_
-    std::cout << "Dijets" << std::endl;
+  std::cout << "Dijets" << std::endl;
   #endif
 
   // Next, construct DiJets out of selected jets with selected ID (not accounting for minDRjl here)
-
-  uint16_t diJetCounter(0);
-
-  for(uint16_t j1 = 0; j1 < selJets_selID.size(); j1++){
-    for(uint16_t j2 = j1 + 1; j2 < selJets_selID.size(); j2++){
-      const uint16_t jidx1 = selJets_selID[j1];
-      const Jet& jet1 = selJets[jidx1];
-      const uint16_t jidx2 = selJets_selID[j2];
-      const Jet& jet2 = selJets[jidx2];
-
-      DiJet m_diJet;
-      m_diJet.p4 = jet1.p4 + jet2.p4;
-      m_diJet.idxs = std::make_pair(jet1.idx, jet2.idx);
-      m_diJet.jidxs = std::make_pair(jidx1, jidx2);
-
-      m_diJet.DR = VectorUtil::DeltaR(jet1.p4, jet2.p4);
-      m_diJet.DEta = DeltaEta(jet1.p4, jet2.p4);
-      m_diJet.DPhi = VectorUtil::DeltaPhi(jet1.p4, jet2.p4);
-
-      for(const BWP::BWP& wp1: BWP::it){
-        for(const BWP::BWP& wp2: BWP::it){
-          uint16_t comb = JetJetBWP(wp1, wp2);
-          m_diJet.BWP[comb] = jet1.BWP[wp1] && jet2.BWP[wp2];
-        }
+  for ( index_t i1{0}; selJets_selID.size() != i1; ++i1 ) {
+    index_t iJ1 = selJets_selID[i1];
+    for ( index_t i2{static_cast<index_t>(i1+1)}; selJets_selID.size() != i2; ++i2 ) {
+      index_t iJ2 = selJets_selID[i2];
+      m_dijets.emplace_back(iJ1, m_jets[iJ1], iJ2, m_jets[iJ2]);
+    }
+  }
+  for ( decltype(m_idxjjDRWP)::iterator iWP{m_idxjjDRWP.begin()}; m_idxjjDRWP.end() != iWP; ++iWP ) {
+    for ( index_t iJJ{0}; m_dijets.size() != iJJ; ++iJJ ) {
+      if ( minDRjl(m_leptons, *(m_idxlWP.at(iWP.index()).idxList()), m_dijets[iJJ]) > m_jetDRleptonCut ) {
+        iWP.idxList()->push_back(iJJ);
       }
-
-      for(const LepID::LepID& id: LepID::it){
-        for(const LepIso::LepIso& iso: LepIso::it){
-          uint16_t combIDIso = LepIDIso(id, iso);
-
-          m_diJet.minDRjl_lepIDIso[combIDIso] = std::min(jet1.minDRjl_lepIDIso[combIDIso], jet2.minDRjl_lepIDIso[combIDIso]);
-
-          // Save the DiJets which have minDRjl>cut, for each leptonIDIso
-          if(m_diJet.minDRjl_lepIDIso[combIDIso] > m_jetDRleptonCut){
-            diJets_DRCut[combIDIso].push_back(diJetCounter);
-
-            // Out of these, save di-b-jets for each combination of b-tagging working points
-            for(const BWP::BWP& wp1: BWP::it){
-              for(const BWP::BWP& wp2: BWP::it){
-                uint16_t combB = JetJetBWP(wp1, wp2);
-                uint16_t combAll = LepIDIsoJetJetBWP(id, iso, wp1, wp2);
-                if ((m_diJet.BWP[combB])
-                        && (std::abs(jet1.p4.Eta()) < m_bJetEtaCut)
-                        && (std::abs(jet2.p4.Eta()) < m_bJetEtaCut))
-                  diBJets_DRCut_BWP_PtOrdered[combAll].push_back(diJetCounter);
-              }
-            }
-
-          }
-
-        }
+    }
+  }
+  for ( decltype(m_idxbbDRWP_PT)::iterator iWP{m_idxbbDRWP_PT.begin()}; m_idxbbDRWP_PT.end() != iWP; ++iWP ) {
+    for ( auto iJJ : *(m_idxjjDRWP.find(iWP.cut().first).idxList()) ) {
+      if ( iWP.cut().second(m_dijets[iJJ]) ) {
+        iWP.idxList()->push_back(iJJ); // NOTE di-b working points may include an ETA cut
       }
-
-      diJets.push_back(m_diJet);
-      diJetCounter++;
     }
   }
 
-  // Order selected di-b-jets according to decreasing CSVv2 discriminant
-  diBJets_DRCut_BWP_CSVv2Ordered = diBJets_DRCut_BWP_PtOrdered;
-  for(const LepID::LepID& id: LepID::it){
-    for(const LepIso::LepIso& iso: LepIso::it){
-      for(const BWP::BWP& wp1: BWP::it){
-        for(const BWP::BWP& wp2: BWP::it){
-          uint16_t idx_comb_b = LepIDIsoJetJetBWP(id, iso, wp1, wp2);
-          std::sort(diBJets_DRCut_BWP_CSVv2Ordered[idx_comb_b].begin(), diBJets_DRCut_BWP_CSVv2Ordered[idx_comb_b].end(), diJetBTagDiscriminantSorter(jets, m_jetCSVv2Name, diJets));
-        }
-      }
-    }
+  for ( std::size_t i{0}; m_idxbbDRWP_PT.size() != i; ++i ) {
+    indexlist_t& tagIdx = *(m_idxbbDRWP_tag.at(i).idxList());
+    tagIdx = *(m_idxbbDRWP_PT.at(i).idxList());
+    std::stable_sort(std::begin(tagIdx), std::end(tagIdx),
+        MoreOf<index_t>([this] ( index_t iJJ ) {
+          return m_dijets[iJJ].first->bDiscriminator(m_jetBTagName)
+               + m_dijets[iJJ].second->bDiscriminator(m_jetBTagName);
+        }));
   }
 
   ///////////////////////////
@@ -390,777 +398,122 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   ///////////////////////////
 
   #ifdef _TT_DEBUG_
-    std::cout << "Dileptons-dijets" << std::endl;
+  std::cout << "Dileptons-dijets" << std::endl;
   #endif
 
   // leptons-(b-)jets
-
-  uint16_t diLepDiJetCounter(0);
-
-  for(uint16_t dilep = 0; dilep < diLeptons.size(); dilep++){
-    const DiLepton& m_diLepton = diLeptons[dilep];
-
-    for(uint16_t dijet = 0; dijet < diJets.size(); dijet++){
-      const DiJet& m_diJet =  diJets[dijet];
-
-      DiLepDiJet m_diLepDiJet(m_diLepton, dilep, m_diJet, dijet);
-
-      m_diLepDiJet.minDRjl = std::min( {
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-      m_diLepDiJet.maxDRjl = std::max( {
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaR(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-      m_diLepDiJet.minDEtajl = std::min( {
-          DeltaEta(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-      m_diLepDiJet.maxDEtajl = std::max( {
-          DeltaEta(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          DeltaEta(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-      m_diLepDiJet.minDPhijl = std::min( {
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-      m_diLepDiJet.maxDPhijl = std::max( {
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.first].p4, selJets[m_diJet.jidxs.second].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.first].p4),
-          (float) VectorUtil::DeltaPhi(leptons[m_diLepton.lidxs.second].p4, selJets[m_diJet.jidxs.second].p4)
-          } );
-
-      diLepDiJets.push_back(m_diLepDiJet);
-
-      for(const LepID::LepID& id1: LepID::it){
-        for(const LepID::LepID& id2: LepID::it){
-          for(const LepIso::LepIso& iso1: LepIso::it){
-            for(const LepIso::LepIso& iso2: LepIso::it){
-
-              uint16_t combID = LepLepID(id1, id2);
-              LepID::LepID minID = std::min(id1, id2);
-
-              uint16_t combIso = LepLepIso(iso1, iso2);
-              LepIso::LepIso minIso = std::min(iso1, iso2);
-
-              uint16_t minCombIDIso = LepIDIso(minID, minIso);
-              uint16_t diLepCombIDIso = LepLepIDIso(id1, iso1, id2, iso2);
-
-              // Store objects for each combined lepton ID/Iso, with jets having minDRjl>cut for leptons corresponding to the loosest combination of the aforementioned ID/Iso
-              if(m_diLepton.ID[combID] && m_diLepton.iso[combIso] && m_diJet.minDRjl_lepIDIso[minCombIDIso] > m_jetDRleptonCut){
-                diLepDiJets_DRCut[diLepCombIDIso].push_back(diLepDiJetCounter);
-
-                // Out of these, store combinations of b-tagging working points
-                for(const BWP::BWP& wp1: BWP::it){
-                  for(const BWP::BWP& wp2: BWP::it){
-                    uint16_t combB = JetJetBWP(wp1, wp2);
-                    uint16_t combAll = LepLepIDIsoJetJetBWP(id1, iso1, id2, iso2, wp1, wp2);
-                    if ((m_diJet.BWP[combB])
-                            && (std::abs(jets.p4[m_diJet.idxs.first].Eta()) < m_bJetEtaCut)
-                            && (std::abs(jets.p4[m_diJet.idxs.second].Eta()) < m_bJetEtaCut))
-                      diLepDiBJets_DRCut_BWP_PtOrdered[combAll].push_back(diLepDiJetCounter);
-                  }
-                } // end b-jet loops
-
-              } // end minDRjl>cut
-
-            }
-          } // end lepton iso loops
-        }
-      } // end lepton ID loops
-
-      diLepDiJetCounter++;
-    } // end dijet loop
-  } // end dilepton loop
+  for ( index_t iLL{0}; m_dileptons.size() != iLL; ++iLL ) {
+    for ( index_t iJJ{0}; m_dijets.size() != iJJ; ++iJJ ) {
+      m_dileptondijets.emplace_back(iLL, m_dileptons[iLL], iJJ, m_dijets[iJJ]);
+      // TODO add delta R, delta Eta and DeltaPhi combinatorics (between jet and lepton)
+    }
+  }
+  for ( decltype(m_idxlljjDRWP)::iterator iWP{m_idxlljjDRWP.begin()}; m_idxlljjDRWP.end() != iWP; ++iWP ) {
+    for ( index_t iLLJJ{0}; m_dileptondijets.size() != iLLJJ; ++iLLJJ ) {
+      if ( ( minDRjl(m_leptons, *(m_idxlWP.find(iWP.cut().first).idxList()), *(m_dileptondijets[iLLJJ].jj)) > m_jetDRleptonCut ) && ( iWP.cut().second(*(m_dileptondijets[iLLJJ].ll)) ) ) {
+        iWP.idxList()->push_back(iLLJJ);
+      }
+    }
+  }
+  for ( decltype(m_idxllbbDRWP_PT)::iterator iWP{m_idxllbbDRWP_PT.begin()}; m_idxllbbDRWP_PT.end() != iWP; ++iWP ) {
+    for ( auto iLLJJ : *(m_idxlljjDRWP.find(iWP.cut().first).idxList()) ) {
+      if ( iWP.cut().second(*(m_dileptondijets[iLLJJ].jj)) ) {
+        iWP.idxList()->push_back(iLLJJ); // NOTE di-b working points may include an ETA cut
+      }
+    }
+  }
 
   // Order selected di-lepton-di-b-jets according to decreasing CSVv2 discriminant
-  diLepDiBJets_DRCut_BWP_CSVv2Ordered = diLepDiBJets_DRCut_BWP_PtOrdered;
-
-  for(const LepID::LepID& id1: LepID::it){
-    for(const LepID::LepID& id2: LepID::it){
-
-      for(const LepIso::LepIso& iso1: LepIso::it){
-        for(const LepIso::LepIso& iso2: LepIso::it){
-
-          for(const BWP::BWP& wp1: BWP::it){
-            for(const BWP::BWP& wp2: BWP::it){
-
-              uint16_t idx_comb_all = LepLepIDIsoJetJetBWP(id1, iso1, id2, iso2, wp1, wp2);
-              std::sort(diLepDiBJets_DRCut_BWP_CSVv2Ordered[idx_comb_all].begin(), diLepDiBJets_DRCut_BWP_CSVv2Ordered[idx_comb_all].end(), diJetBTagDiscriminantSorter(jets, m_jetCSVv2Name, diLepDiJets));
-
-            }
-          }
-
-        }
-      }
-
-    }
+  for ( std::size_t i{0}; m_idxllbbDRWP_PT.size() != i; ++i ) {
+    indexlist_t& tagIdx = *(m_idxllbbDRWP_tag.at(i).idxList());
+    tagIdx = *(m_idxllbbDRWP_PT.at(i).idxList());
+    std::stable_sort(std::begin(tagIdx), std::end(tagIdx),
+        MoreOf<index_t>([this] ( index_t iLLJJ ) {
+          return m_dileptondijets[iLLJJ].jj->first->bDiscriminator(m_jetBTagName)
+               + m_dileptondijets[iLLJJ].jj->second->bDiscriminator(m_jetBTagName);
+        }));
   }
 
   // leptons-(b-)jets-MET
 
   #ifdef _TT_DEBUG_
-    std::cout << "Dileptons-Dijets-MET" << std::endl;
+  std::cout << "Dileptons-Dijets-MET" << std::endl;
   #endif
 
-  const METProducer &met = producers.get<METProducer>(m_met_producer);
-
-  for(uint16_t i = 0; i < diLepDiJets.size(); i++){
-    // Using regular MET
-    DiLepDiJetMet m_diLepDiJetMet(diLepDiJets[i], i, met.p4);
-
-    m_diLepDiJetMet.minDR_l_Met = std::min(
-        (float) VectorUtil::DeltaR(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaR(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDR_l_Met = std::max(
-        (float) VectorUtil::DeltaR(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaR(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.minDEta_l_Met = std::min(
-        DeltaEta(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        DeltaEta(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDEta_l_Met = std::max(
-        DeltaEta(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        DeltaEta(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.minDPhi_l_Met = std::min(
-        (float) VectorUtil::DeltaPhi(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaPhi(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDPhi_l_Met = std::max(
-        (float) VectorUtil::DeltaPhi(leptons[m_diLepDiJetMet.diLepton->lidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaPhi(leptons[m_diLepDiJetMet.diLepton->lidxs.second].p4, met.p4)
-        );
-
-    m_diLepDiJetMet.minDR_j_Met = std::min(
-        (float) VectorUtil::DeltaR(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaR(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDR_j_Met = std::max(
-        (float) VectorUtil::DeltaR(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaR(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.minDEta_j_Met = std::min(
-        DeltaEta(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        DeltaEta(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDEta_j_Met = std::max(
-        DeltaEta(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        DeltaEta(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.minDPhi_j_Met = std::min(
-        (float) VectorUtil::DeltaPhi(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaPhi(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-    m_diLepDiJetMet.maxDPhi_j_Met = std::max(
-        (float) VectorUtil::DeltaPhi(selJets[m_diLepDiJetMet.diJet->jidxs.first].p4, met.p4),
-        (float) VectorUtil::DeltaPhi(selJets[m_diLepDiJetMet.diJet->jidxs.second].p4, met.p4)
-        );
-
-    diLepDiJetsMet.push_back(m_diLepDiJetMet);
-
-    for(const LepID::LepID& id1: LepID::it){
-      for(const LepID::LepID& id2: LepID::it){
-        for(const LepIso::LepIso& iso1: LepIso::it){
-          for(const LepIso::LepIso& iso2: LepIso::it){
-
-            uint16_t combID = LepLepID(id1, id2);
-            LepID::LepID minID = std::min(id1, id2);
-
-            uint16_t combIso = LepLepIso(iso1, iso2);
-            LepIso::LepIso minIso = std::min(iso1, iso2);
-
-            uint16_t minCombIDIso = LepIDIso(minID, minIso);
-            uint16_t diLepCombIDIso = LepLepIDIso(id1, iso1, id2, iso2);
-
-            // Store objects for each combined lepton ID/Iso, with jets having minDRjl>cut for leptons corresponding to the loosest combination of the aforementioned ID/Iso
-
-            // First regular MET
-            if(m_diLepDiJetMet.diLepton->ID[combID] && m_diLepDiJetMet.diLepton->iso[combIso] && m_diLepDiJetMet.diJet->minDRjl_lepIDIso[minCombIDIso] > m_jetDRleptonCut){
-              diLepDiJetsMet_DRCut[diLepCombIDIso].push_back(i);
-
-              // Out of these, store combinations of b-tagging working points
-              for(const BWP::BWP& wp1: BWP::it){
-                for(const BWP::BWP& wp2: BWP::it){
-                  uint16_t combB = JetJetBWP(wp1, wp2);
-                  uint16_t combAll = LepLepIDIsoJetJetBWP(id1, iso1, id2, iso2, wp1, wp2);
-                  if ((m_diLepDiJetMet.diJet->BWP[combB])
-                          && (std::abs(jets.p4[m_diLepDiJetMet.diJet->idxs.first].Eta()) < m_bJetEtaCut)
-                          && (std::abs(jets.p4[m_diLepDiJetMet.diJet->idxs.second].Eta()) < m_bJetEtaCut))
-                    diLepDiBJetsMet_DRCut_BWP_PtOrdered[combAll].push_back(i);
-                }
-              } // end b-jet loops
-
-            } // end minDRjl>cut
-
-          }
-        } // end lepton iso loops
+  // Using regular MET
+  const myLorentzVector met{producers.get<METProducer>(m_met_producer).p4};
+  for ( index_t illjj{0}; m_dileptondijets.size() != illjj; ++illjj ) {
+    m_dileptondijetmets.emplace_back(illjj, m_dileptondijets[illjj], met);
+    // TODO delta(R,eta,phi) l-met, j-met, min&max
+  }
+  for ( decltype(m_idxlljjmDRWP)::iterator iWP{m_idxlljjmDRWP.begin()}; m_idxlljjmDRWP.end() != iWP; ++iWP ) {
+    for ( index_t iLLJJM{0}; m_dileptondijetmets.size() != iLLJJM; ++iLLJJM ) {
+      if ( ( minDRjl(m_leptons, *(m_idxlWP.find(iWP.cut().first).idxList()), *(m_dileptondijetmets[iLLJJM].lljj->jj)) > m_jetDRleptonCut ) && ( iWP.cut().second(*(m_dileptondijetmets[iLLJJM].lljj->ll)) ) ) {
+        iWP.idxList()->push_back(iLLJJM);
       }
-    } // end lepton ID loops
-
-  } // end diLepDiJet loop
-
+    }
+  }
+  for ( decltype(m_idxllbbmDRWP_PT)::iterator iWP{m_idxllbbmDRWP_PT.begin()}; m_idxllbbmDRWP_PT.end() != iWP; ++iWP ) {
+    for ( auto iLLJJM : *(m_idxlljjmDRWP.find(iWP.cut().first).idxList()) ) {
+      if ( iWP.cut().second(*(m_dileptondijetmets[iLLJJM].lljj->jj)) ) {
+        iWP.idxList()->push_back(iLLJJM); // NOTE di-b working points may include an ETA cut
+      }
+    }
+  }
   // Store objects according to CSVv2
   // First regular MET
-  diLepDiBJetsMet_DRCut_BWP_CSVv2Ordered = diLepDiBJetsMet_DRCut_BWP_PtOrdered;
-  for(const LepID::LepID& id1: LepID::it){
-    for(const LepID::LepID& id2: LepID::it){
-
-      for(const LepIso::LepIso& iso1: LepIso::it){
-        for(const LepIso::LepIso& iso2: LepIso::it){
-
-          for(const BWP::BWP& wp1: BWP::it){
-            for(const BWP::BWP& wp2: BWP::it){
-
-              uint16_t idx_comb_all = LepLepIDIsoJetJetBWP(id1, iso1, id2, iso2, wp1, wp2);
-              std::sort(diLepDiBJetsMet_DRCut_BWP_CSVv2Ordered[idx_comb_all].begin(), diLepDiBJetsMet_DRCut_BWP_CSVv2Ordered[idx_comb_all].end(), diJetBTagDiscriminantSorter(jets, m_jetCSVv2Name, diLepDiJetsMet));
-
-            }
-          }
-
-        }
-      }
-
-    }
+  for ( std::size_t illbbmWP{0}; m_idxllbbmDRWP_PT.size() != illbbmWP; ++illbbmWP ) {
+    indexlist_t& tagIdx = *(m_idxllbbmDRWP_tag.at(illbbmWP).idxList());
+    tagIdx = *(m_idxllbbmDRWP_PT.at(illbbmWP).idxList());
+    std::stable_sort(std::begin(tagIdx), std::end(tagIdx),
+        MoreOf<index_t>([this] ( index_t iLLJJM ) {
+          return m_dileptondijetmets[iLLJJM].lljj->jj->first->bDiscriminator(m_jetBTagName)
+               + m_dileptondijetmets[iLLJJM].lljj->jj->second->bDiscriminator(m_jetBTagName);
+        }));
   }
-
-  ///////////////////////////
-  //       TRIGGER         //
-  ///////////////////////////
 
   #ifdef _TT_DEBUG_
-    std::cout << "Trigger" << std::endl;
+  std::cout << "End event." << std::endl;
   #endif
+}
 
-  if (producers.exists("hlt")) {
-
-      const HLTProducer& hlt = producers.get<HLTProducer>("hlt");
-
-      if (hlt.paths.empty()) {
+/**
+ * Try to match `lepton` with an online object, using a deltaR and a deltaPt cut
+ * Returns the index inside the HLTProducer collection, or -1 if no match is found.
+ */
+TTWAnalysis::sindex_t TTWAnalyzer::matchOfflineLepton( const TTWAnalysis::Lepton& lepton, const HLTProducer& hlt ) const
+{
 #if TT_HLT_DEBUG
-          std::cout << "No HLT path triggered for this event. Skipping HLT matching." << std::endl;
-#endif
-          goto after_hlt_matching;
-      }
-
-#if TT_HLT_DEBUG
-      std::cout << "HLT path triggered for this event:" << std::endl;
-      for (const std::string& path: hlt.paths) {
-          std::cout << "\t" << path << std::endl;
-      }
+  std::cout << "Trying to match offline lepton: " << std::endl;
+  std::cout << "\tMuon? " << lepton.isMu() << " ; Pt: " << lepton.p4().Pt() << " ; Eta: " << lepton.p4().Eta() << " ; Phi: " << lepton.p4().Phi() << " ; E: " << lepton.p4().E() << std::endl;
 #endif
 
-      /*
-       * Try to match `lepton` with an online object, using a deltaR and a deltaPt cut
-       * Returns the index inside the HLTProducer collection, or -1 if no match is found.
-       */
-      auto matchOfflineLepton = [&](Lepton& lepton) {
+  float min_dr = std::numeric_limits<float>::max();
 
-          if (lepton.hlt_already_tried_matching)
-              return lepton.hlt_idx;
+  TTWAnalysis::sindex_t index{-1};
+  for (size_t iHlt{0}; hlt.object_p4.size() != iHlt; ++iHlt) {
+    float dr = VectorUtil::DeltaR(lepton.p4(), hlt.object_p4[iHlt]);
+    float dpt_over_pt = std::abs(lepton.p4().Pt() - hlt.object_p4[iHlt].Pt()) / lepton.p4().Pt();
 
-#if TT_HLT_DEBUG
-          std::cout << "Trying to match offline lepton: " << std::endl;
-          std::cout << "\tMuon? " << lepton.isMu << " ; Pt: " << lepton.p4.Pt() << " ; Eta: " << lepton.p4.Eta() << " ; Phi: " << lepton.p4.Phi() << " ; E: " << lepton.p4.E() << std::endl;
-#endif
-
-          float min_dr = std::numeric_limits<float>::max();
-
-          int16_t index = -1;
-          for (size_t hlt_object = 0; hlt_object < hlt.object_p4.size(); hlt_object++) {
-
-              float dr = VectorUtil::DeltaR(lepton.p4, hlt.object_p4[hlt_object]);
-              float dpt_over_pt = std::abs(lepton.p4.Pt() - hlt.object_p4[hlt_object].Pt()) / lepton.p4.Pt();
-
-              if (dr > m_hltDRCut)
-                  continue;
-
-              if (dpt_over_pt > m_hltDPtCut)
-                  continue;
-
-              if (dr < min_dr) {
-                  min_dr = dr;
-                  index = hlt_object;
-              }
-          }
-
-#if TT_HLT_DEBUG
-          if (index != -1) {
-              std::cout << "\033[32mMatched with online object:\033[00m" << std::endl;
-              std::cout << "\tPDG Id: " << hlt.object_pdg_id[index] << " ; Pt: " << hlt.object_p4[index].Pt() << " ; Eta: " << hlt.object_p4[index].Eta() << " ; Phi: " << hlt.object_p4[index].Phi() << " ; E: " << hlt.object_p4[index].E() << std::endl;
-              std::cout << "\tΔR: " << min_dr << " ; ΔPt / Pt: " << std::abs(lepton.p4.Pt() - hlt.object_p4[index].Pt()) / lepton.p4.Pt() << std::endl;
-          } else {
-              std::cout << "\033[31mNo match found\033[00m" << std::endl;
-          }
-#endif
-
-          lepton.hlt_idx = index;
-          lepton.hlt_already_tried_matching = true;
-          lepton.hlt_DR_matched_object = min_dr;
-          lepton.hlt_DPt_matched_object = std::abs(lepton.p4.Pt() - hlt.object_p4[index].Pt()) / lepton.p4.Pt();
-
-          return index;
-      };
-
-      // Iterate over all dilepton pairs
-      for (auto& m_diLepton: diLeptons) {
-          // For each lepton of this pair, find the online object
-          m_diLepton.hlt_idxs = std::make_pair(
-                  matchOfflineLepton(leptons[m_diLepton.lidxs.first]),
-                  matchOfflineLepton(leptons[m_diLepton.lidxs.second])
-         );
-      }
-
+    if ( ( dr <= m_hltDRCut ) && ( dpt_over_pt <= m_hltDPtCut )
+      && ( dr < min_dr ) )
+    {
+      min_dr = dr;
+      index = iHlt;
+    }
   }
 
-after_hlt_matching:
-
-    ///////////////////////////
-    //       GEN INFO        //
-    ///////////////////////////
-
-    #ifdef _TT_DEBUG_
-      std::cout << "Generator" << std::endl;
-    #endif
-
-    if (event.isRealData())
-        return;
-
-    const GenParticlesProducer& gen_particles = producers.get<GenParticlesProducer>("gen_particles");
-
-    // 'Pruned' particles are from the hard process
-    // 'Packed' particles are stable particles
-
-    std::function<bool(size_t, size_t)> pruned_decays_from = [&pruned_decays_from, &gen_particles](size_t particle_index, size_t mother_index) -> bool {
-        // Iterator over all pruned particles to find if the particle `particle_index` has `mother_index` in its decay history
-        if (gen_particles.pruned_mothers_index[particle_index].empty())
-            return false;
-
-        size_t index = gen_particles.pruned_mothers_index[particle_index][0];
-
-        if (index == mother_index) {
-            return true;
-        }
-
-        if (pruned_decays_from(index, mother_index))
-            return true;
-
-        return false;
-    };
-
-#if TT_GEN_DEBUG
-    std::function<void(size_t)> print_mother_chain = [&gen_particles, &print_mother_chain](size_t p) {
-
-        if (gen_particles.pruned_mothers_index[p].empty()) {
-            std::cout << std::endl;
-            return;
-        }
-
-        size_t index = gen_particles.pruned_mothers_index[p][0];
-            std::cout << " <- #" << index << "(" << gen_particles.pruned_pdg_id[index] << ")";
-            print_mother_chain(index);
-    };
+#if TT_HLT_DEBUG
+  if (index != -1) {
+    std::cout << "\033[32mMatched with online object:\033[00m" << std::endl;
+    std::cout << "\tPDG Id: " << hlt.object_pdg_id[index] << " ; Pt: " << hlt.object_p4[index].Pt() << " ; Eta: " << hlt.object_p4[index].Eta() << " ; Phi: " << hlt.object_p4[index].Phi() << " ; E: " << hlt.object_p4[index].E() << std::endl;
+    std::cout << "\tΔR: " << min_dr << " ; ΔPt / Pt: " << std::abs(lepton.p4().Pt() - hlt.object_p4[index].Pt()) / lepton.p4().Pt() << std::endl;
+  } else {
+    std::cout << "\033[31mNo match found\033[00m" << std::endl;
+  }
 #endif
 
-    // We need to initialize everything to -1, since 0 is a valid entry in the tt_genParticles array
-    gen_t = -1;
-    gen_t_beforeFSR = -1;
-    gen_tbar = -1;
-    gen_tbar_beforeFSR = -1;
-
-    gen_b = -1;
-    gen_b_beforeFSR = -1;
-    gen_bbar = -1;
-    gen_bbar_beforeFSR = -1;
-
-    gen_jet1_t = -1;
-    gen_jet1_t_beforeFSR = -1;
-    gen_jet1_tbar = -1;
-    gen_jet1_tbar_beforeFSR = -1;
-    gen_jet2_t = -1;
-    gen_jet2_t_beforeFSR = -1;
-    gen_jet2_tbar = -1;
-    gen_jet2_tbar_beforeFSR = -1;
-
-    gen_lepton_t = -1;
-    gen_lepton_t_beforeFSR = -1;
-    gen_neutrino_t = -1;
-    gen_neutrino_t_beforeFSR = -1;
-    gen_lepton_tbar = -1;
-    gen_lepton_tbar_beforeFSR = -1;
-    gen_neutrino_tbar = -1;
-    gen_neutrino_tbar_beforeFSR = -1;
-
-    gen_matched_lepton_t = -1;
-    gen_matched_lepton_tbar = -1;
-
-    size_t gen_index(0);
-    for (size_t i = 0; i < gen_particles.pruned_pdg_id.size(); i++) {
-
-        int16_t pdg_id = gen_particles.pruned_pdg_id[i];
-        uint16_t a_pdg_id = std::abs(pdg_id);
-
-        // We only care of particles with PDG id <= 16 (16 is neutrino tau)
-        if (a_pdg_id > 16)
-            continue;
-
-        GenStatusFlags flags(gen_particles.pruned_status_flags[i]);
-
-        if (! flags.isLastCopy() && ! flags.isFirstCopy())
-            continue;
-
-        if (! flags.fromHardProcess())
-            continue;
-
-#if TT_GEN_DEBUG
-        std::cout << "---" << std::endl;
-        std::cout << "Gen particle #" << i << ": PDG id: " << gen_particles.pruned_pdg_id[i];
-        print_mother_chain(i);
-        flags.dump();
-#endif
-
-        if (pdg_id == 6) {
-            FILL_GEN_COLL(t);
-            continue;
-        } else if (pdg_id == -6) {
-            FILL_GEN_COLL(tbar);
-            continue;
-        }
-
-        if (gen_t == -1 || gen_tbar == -1) {
-            // Don't bother if we don't have found the tops
-            continue;
-        }
-
-        bool from_t_decay = pruned_decays_from(i, genParticles[gen_t].pruned_idx);
-        bool from_tbar_decay = pruned_decays_from(i, genParticles[gen_tbar].pruned_idx);
-
-        // Only keep particles coming from the tops decay
-        if (! from_t_decay && ! from_tbar_decay)
-            continue;
-
-        if (pdg_id == 5) {
-            // Maybe it's a b coming from the W decay
-            if (!flags.isFirstCopy() && flags.isLastCopy() && gen_b == -1) {
-
-                // This can be a B decaying from a W
-                // However, we can't rely on the presence of the W in the decay chain, as it may be generator specific
-                // Since it's the last copy (ie, after FSR), we can check if this B comes from the B assigned to the W decay (ie, gen_jet1_t_beforeFSR, gen_jet2_t_beforeFSR)
-                // If yes, then it's not the B coming directly from the top decay
-                if ((gen_jet1_t_beforeFSR != -1 && std::abs(genParticles[gen_jet1_t_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet2_t_beforeFSR != -1 && std::abs(genParticles[gen_jet2_t_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet1_tbar_beforeFSR != -1 && std::abs(genParticles[gen_jet1_tbar_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet2_tbar_beforeFSR != -1 && std::abs(genParticles[gen_jet2_tbar_beforeFSR].pdg_id) == 5)) {
-
-#if TT_GEN_DEBUG
-                    std::cout << "A quark coming from W decay is a b" << std::endl;
-#endif
-
-                    if (! (gen_jet1_tbar_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet1_tbar_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet2_tbar_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet2_tbar_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet1_t_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet1_t_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet2_t_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet2_t_beforeFSR].pruned_idx))) {
-#if TT_GEN_DEBUG
-                        std::cout << "This after-FSR b quark is not coming from a W decay" << std::endl;
-#endif
-                        FILL_GEN_COLL(b);
-                        continue;
-                    }
-#if TT_GEN_DEBUG
-                    else {
-                        std::cout << "This after-FSR b quark comes from a W decay" << std::endl;
-                    }
-#endif
-                } else {
-#if TT_GEN_DEBUG
-                    std::cout << "Assigning gen_b" << std::endl;
-#endif
-                    FILL_GEN_COLL(b);
-                    continue;
-                }
-            } else if (flags.isFirstCopy() && gen_b_beforeFSR == -1) {
-                FILL_GEN_COLL(b);
-                continue;
-            } else {
-#if TT_GEN_DEBUG
-                std::cout << "This should not happen!" << std::endl;
-#endif
-            }
-        } else if (pdg_id == -5) {
-            if (!flags.isFirstCopy() && flags.isLastCopy() && gen_bbar == -1) {
-
-                // This can be a B decaying from a W
-                // However, we can't rely on the presence of the W in the decay chain, as it may be generator specific
-                // Since it's the last copy (ie, after FSR), we can check if this B comes from the B assigned to the W decay (ie, gen_jet1_t_beforeFSR, gen_jet2_t_beforeFSR)
-                // If yes, then it's not the B coming directly from the top decay
-                if ((gen_jet1_t_beforeFSR != -1 && std::abs(genParticles[gen_jet1_t_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet2_t_beforeFSR != -1 && std::abs(genParticles[gen_jet2_t_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet1_tbar_beforeFSR != -1 && std::abs(genParticles[gen_jet1_tbar_beforeFSR].pdg_id) == 5) ||
-                    (gen_jet2_tbar_beforeFSR != -1 && std::abs(genParticles[gen_jet2_tbar_beforeFSR].pdg_id) == 5)) {
-
-#if TT_GEN_DEBUG
-                    std::cout << "A quark coming from W decay is a bbar" << std::endl;
-#endif
-
-                    if (! (gen_jet1_tbar_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet1_tbar_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet2_tbar_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet2_tbar_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet1_t_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet1_t_beforeFSR].pruned_idx)) &&
-                        ! (gen_jet2_t_beforeFSR != -1 && pruned_decays_from(i, genParticles[gen_jet2_t_beforeFSR].pruned_idx))) {
-#if TT_GEN_DEBUG
-                        std::cout << "This after-fsr b anti-quark is not coming from a W decay" << std::endl;
-#endif
-                        FILL_GEN_COLL(bbar);
-                        continue;
-                    }
-#if TT_GEN_DEBUG
-                    else {
-                        std::cout << "This after-fsr b anti-quark comes from a W decay" << std::endl;
-                    }
-#endif
-                } else {
-#if TT_GEN_DEBUG
-                    std::cout << "Assigning gen_bbar" << std::endl;
-#endif
-                    FILL_GEN_COLL(bbar);
-                    continue;
-                }
-            } else if (flags.isFirstCopy() && gen_bbar_beforeFSR == -1) {
-                FILL_GEN_COLL(bbar);
-                continue;
-            }
-        }
-
-        if ((gen_tbar == -1) || (gen_t == -1))
-            continue;
-
-        if (gen_t != -1 && from_t_decay) {
-#if TT_GEN_DEBUG
-        std::cout << "Coming from the top chain decay" << std::endl;
-#endif
-            if (a_pdg_id >= 1 && a_pdg_id <= 5) {
-                FILL_GEN_COLL2(jet1_t, jet2_t, "Error: more than two quarks coming from top decay");
-            } else if (a_pdg_id == 11 || a_pdg_id == 13 || a_pdg_id == 15) {
-                FILL_GEN_COLL(lepton_t);
-            } else if (a_pdg_id == 12 || a_pdg_id == 14 || a_pdg_id == 16) {
-                FILL_GEN_COLL(neutrino_t);
-            } else {
-                std::cout << "Error: unknown particle coming from top decay - #" << i << " ; PDG Id: " << pdg_id << std::endl;
-            }
-        } else if (gen_tbar != -1 && from_tbar_decay) {
-#if TT_GEN_DEBUG
-        std::cout << "Coming from the anti-top chain decay" << std::endl;
-#endif
-            if (a_pdg_id >= 1 && a_pdg_id <= 5) {
-                FILL_GEN_COLL2(jet1_tbar, jet2_tbar, "Error: more than two quarks coming from anti-top decay");
-            } else if (a_pdg_id == 11 || a_pdg_id == 13 || a_pdg_id == 15) {
-                FILL_GEN_COLL(lepton_tbar);
-            } else if (a_pdg_id == 12 || a_pdg_id == 14 || a_pdg_id == 16) {
-                FILL_GEN_COLL(neutrino_tbar);
-            } else {
-                std::cout << "Error: unknown particle coming from anti-top decay - #" << i << " ; PDG Id: " << pdg_id << std::endl;
-            }
-        }
-    }
-
-    if ( ( gen_t == -1 ) || ( gen_tbar == -1 ) ) {
-#if TT_GEN_DEBUG
-        std::cout << "This is not a ttbar event" << std::endl;
-#endif
-        gen_ttbar_decay_type = NotTT;
-        return;
-    }
-
-    if ((gen_jet1_t != -1) && (gen_jet2_t != -1) && (gen_jet1_tbar != -1) && (gen_jet2_tbar != -1)) {
-#if TT_GEN_DEBUG
-        std::cout << "Hadronic ttbar decay" << std::endl;
-#endif
-        gen_ttbar_decay_type = Hadronic;
-    } else if (
-            ((gen_lepton_t != -1) && (gen_lepton_tbar == -1)) ||
-            ((gen_lepton_t == -1) && (gen_lepton_tbar != -1))
-            ) {
-
-#if TT_GEN_DEBUG
-        std::cout << "Semileptonic ttbar decay" << std::endl;
-#endif
-
-        uint16_t lepton_pdg_id;
-        if (gen_lepton_t != -1)
-            lepton_pdg_id = std::abs(genParticles[gen_lepton_t].pdg_id);
-        else
-            lepton_pdg_id = std::abs(genParticles[gen_lepton_tbar].pdg_id);
-
-        if (lepton_pdg_id == 11)
-            gen_ttbar_decay_type = Semileptonic_e;
-        else if (lepton_pdg_id == 13)
-            gen_ttbar_decay_type = Semileptonic_mu;
-        else
-            gen_ttbar_decay_type = Semileptonic_tau;
-    } else if (gen_lepton_t != -1 && gen_lepton_tbar != -1) {
-        uint16_t lepton_t_pdg_id = std::abs(genParticles[gen_lepton_t].pdg_id);
-        uint16_t lepton_tbar_pdg_id = std::abs(genParticles[gen_lepton_tbar].pdg_id);
-
-#if TT_GEN_DEBUG
-        std::cout << "Dileptonic ttbar decay" << std::endl;
-#endif
-
-        if (lepton_t_pdg_id == 11 && lepton_tbar_pdg_id == 11)
-            gen_ttbar_decay_type = Dileptonic_ee;
-        else if (lepton_t_pdg_id == 13 && lepton_tbar_pdg_id == 13)
-            gen_ttbar_decay_type = Dileptonic_mumu;
-        else if (lepton_t_pdg_id == 15 && lepton_tbar_pdg_id == 15)
-            gen_ttbar_decay_type = Dileptonic_tautau;
-        else if (
-                (lepton_t_pdg_id == 11 && lepton_tbar_pdg_id == 13) ||
-                (lepton_t_pdg_id == 13 && lepton_tbar_pdg_id == 11)
-                ) {
-            gen_ttbar_decay_type = Dileptonic_mue;
-        }
-        else if (
-                (lepton_t_pdg_id == 11 && lepton_tbar_pdg_id == 15) ||
-                (lepton_t_pdg_id == 15 && lepton_tbar_pdg_id == 11)
-                ) {
-            gen_ttbar_decay_type = Dileptonic_etau;
-        }
-        else if (
-                (lepton_t_pdg_id == 13 && lepton_tbar_pdg_id == 15) ||
-                (lepton_t_pdg_id == 15 && lepton_tbar_pdg_id == 13)
-                ) {
-            gen_ttbar_decay_type = Dileptonic_mutau;
-        } else {
-            std::cout << "Error: unknown dileptonic ttbar decay." << std::endl;
-            gen_ttbar_decay_type = NotTT;
-            return;
-        }
-    } else {
-        std::cout << "Error: unknown ttbar decay." << std::endl;
-        gen_ttbar_decay_type = UnknownTT;
-    }
-
-    gen_ttbar_p4 = genParticles[gen_t].p4 + genParticles[gen_tbar].p4;
-    if (gen_t_beforeFSR != -1 && gen_tbar_beforeFSR != -1)
-        gen_ttbar_beforeFSR_p4 = genParticles[gen_t_beforeFSR].p4 + genParticles[gen_tbar_beforeFSR].p4;
-
-    gen_t_tbar_deltaR = VectorUtil::DeltaR(genParticles[gen_t].p4, genParticles[gen_tbar].p4);
-    gen_t_tbar_deltaEta = DeltaEta(genParticles[gen_t].p4, genParticles[gen_tbar].p4);
-    gen_t_tbar_deltaPhi = VectorUtil::DeltaPhi(genParticles[gen_t].p4, genParticles[gen_tbar].p4);
-
-    gen_b_bbar_deltaR = VectorUtil::DeltaR(genParticles[gen_b].p4, genParticles[gen_bbar].p4);
-
-    if (gen_ttbar_decay_type > Hadronic) {
-
-        float min_dr_lepton_t = std::numeric_limits<float>::max();
-        float min_dr_lepton_tbar = std::numeric_limits<float>::max();
-
-        size_t lepton_index = 0;
-        for (auto& lepton: leptons) {
-
-            if (gen_lepton_t != -1) {
-                float dr = VectorUtil::DeltaR(genParticles[gen_lepton_t].p4, lepton.p4);
-                if (dr < min_dr_lepton_t &&
-                        (std::abs(lepton.pdg_id()) == std::abs(genParticles[gen_lepton_t].pdg_id))) {
-                    min_dr_lepton_t = dr;
-                    gen_matched_lepton_t = lepton_index;
-                }
-                gen_lepton_t_deltaR.push_back(dr);
-            }
-
-            if (gen_lepton_tbar != -1) {
-                float dr = VectorUtil::DeltaR(genParticles[gen_lepton_tbar].p4, lepton.p4);
-                if (dr < min_dr_lepton_tbar &&
-                        (std::abs(lepton.pdg_id()) == std::abs(genParticles[gen_lepton_tbar].pdg_id))) {
-                    min_dr_lepton_tbar = dr;
-                    gen_matched_lepton_tbar = lepton_index;
-                }
-                gen_lepton_tbar_deltaR.push_back(dr);
-            }
-
-            lepton_index++;
-        }
-    }
-
-    // Match b quarks to jets
-
-    const float MIN_DR_JETS = 0.8;
-    for (const auto& id: LepID::it) {
-      for (const auto& iso: LepIso::it) {
-          uint16_t IdWP = LepIDIso(id, iso);
-
-          float min_dr_b = MIN_DR_JETS;
-          float min_dr_bbar = MIN_DR_JETS;
-          float min_dr_b_beforeFSR = MIN_DR_JETS;
-          float min_dr_bbar_beforeFSR = MIN_DR_JETS;
-          size_t jet_index = 0;
-
-          int16_t local_gen_matched_b = -1;
-          int16_t local_gen_matched_bbar = -1;
-          int16_t local_gen_matched_b_beforeFSR = -1;
-          int16_t local_gen_matched_bbar_beforeFSR = -1;
-          for (auto& jet: selJets_selID_DRCut[IdWP]) {
-              float dr = VectorUtil::DeltaR(genParticles[gen_b].p4, jets.p4[jet]);
-              if (dr < min_dr_b) {
-                  min_dr_b = dr;
-                  local_gen_matched_b = jet_index;
-              }
-              gen_b_deltaR[IdWP].push_back(dr);
-
-              dr = VectorUtil::DeltaR(genParticles[gen_b_beforeFSR].p4, jets.p4[jet]);
-              if (dr < min_dr_b_beforeFSR) {
-                  min_dr_b_beforeFSR = dr;
-                  local_gen_matched_b_beforeFSR = jet_index;
-              }
-              gen_b_beforeFSR_deltaR[IdWP].push_back(dr);
-
-              dr = VectorUtil::DeltaR(genParticles[gen_bbar].p4, jets.p4[jet]);
-              if (dr < min_dr_bbar) {
-                  min_dr_bbar = dr;
-                  local_gen_matched_bbar = jet_index;
-              }
-              gen_bbar_deltaR[IdWP].push_back(dr);
-
-              dr = VectorUtil::DeltaR(genParticles[gen_bbar_beforeFSR].p4, jets.p4[jet]);
-              if (dr < min_dr_bbar_beforeFSR) {
-                  min_dr_bbar_beforeFSR = dr;
-                  local_gen_matched_bbar_beforeFSR = jet_index;
-              }
-              gen_bbar_beforeFSR_deltaR[IdWP].push_back(dr);
-
-              jet_index++;
-          }
-
-          gen_matched_b[IdWP] = local_gen_matched_b;
-          gen_matched_bbar[IdWP] = local_gen_matched_bbar;
-          gen_matched_b_beforeFSR[IdWP] = local_gen_matched_b_beforeFSR;
-          gen_matched_bbar_beforeFSR[IdWP] = local_gen_matched_bbar_beforeFSR;
-      }
-    }
-
-    if (gen_b > -1 && gen_lepton_t > -1) {
-        gen_b_lepton_t_deltaR = VectorUtil::DeltaR(genParticles[gen_b].p4, genParticles[gen_lepton_t].p4);
-    }
-
-    if (gen_bbar > -1 && gen_lepton_tbar > -1) {
-        gen_bbar_lepton_tbar_deltaR = VectorUtil::DeltaR(genParticles[gen_bbar].p4, genParticles[gen_lepton_tbar].p4);
-    }
-
-    #ifdef _TT_DEBUG_
-      std::cout << "End event." << std::endl;
-    #endif
-
+  return index;
 }
 
 void TTWAnalyzer::registerCategories(CategoryManager& manager, const edm::ParameterSet& config) {
@@ -1168,6 +521,7 @@ void TTWAnalyzer::registerCategories(CategoryManager& manager, const edm::Parame
     manager.new_category<TTWAnalysis::GDileptonCategory>(catName, catName+" category", config.getParameter<edm::ParameterSet>(catName));
   }
 }
+
 
 #include <FWCore/PluginManager/interface/PluginFactory.h>
 DEFINE_EDM_PLUGIN(ExTreeMakerAnalyzerFactory, TTWAnalyzer, "ttw_analyzer");

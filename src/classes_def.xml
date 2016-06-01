@@ -1,26 +1,6 @@
 <lcgdict>
   <class name="TTWAnalysis::BaseObject"/>
   <class name="std::vector<TTWAnalysis::BaseObject>"/>
-  <class name="TTWAnalysis::Lepton">
-    <field name="hlt_already_tried_matching" transient="true"/>
-  </class>
-  <class name="std::vector<TTWAnalysis::Lepton>"/>
-  <class name="TTWAnalysis::Jet"/>
-  <class name="std::vector<TTWAnalysis::Jet>"/>
-  <class name="TTWAnalysis::DiLepton"/>
-  <class name="std::vector<TTWAnalysis::DiLepton>"/>
-  <class name="TTWAnalysis::DiJet"/>
-  <class name="std::vector<TTWAnalysis::DiJet>"/>
-  <class name="TTWAnalysis::DiLepDiJet">
-    <field name="diLepton" transient="true"/>
-    <field name="diJet" transient="true"/>
-  </class>
-  <class name="std::vector<TTWAnalysis::DiLepDiJet>"/>
-  <class name="TTWAnalysis::DiLepDiJetMet">
-    <field name="diLepton" transient="true"/>
-    <field name="diJet" transient="true"/>
-  </class>
-  <class name="std::vector<TTWAnalysis::DiLepDiJetMet>"/>
   <class name="std::vector<uint16_t>"/>
   <class name="std::vector<float>"/>
   <class name="std::vector<std::vector<uint16_t>>"/>
@@ -28,5 +8,7 @@
     <field name="pruned_idx" transient="true"/>
   </class>
   <class name="std::vector<TTWAnalysis::GenParticle>"/>
+  <class name="TTWAnalysis::Lepton"/>
+  <class name="TTWAnalysis::DiLepton"/>
 </lcgdict>
 

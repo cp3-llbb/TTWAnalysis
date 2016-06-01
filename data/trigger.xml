@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<triggers>
+    <runs from="0" to="999999">
+        <!-- Double mu -->
+        <path>HLT_Mu17_TrkIsoVVL_(Tk)?Mu8_TrkIsoVVL_DZ_v.*</path>
+        <!-- Double ele -->
+        <path>HLT_Ele17_Ele12_CaloIdL_TrackIdL_IsoVL_DZ_v.*</path>
+        <!-- Muon + electron -->
+        <path>HLT_Mu17_TrkIsoVVL_Ele12_CaloIdL_TrackIdL_IsoVL_v.*</path>
+        <path>HLT_Mu8_TrkIsoVVL_Ele17_CaloIdL_TrackIdL_IsoVL_v.*</path>
+        <!-- Single mu -->
+        <path>HLT_IsoMu27_v.*</path>
+        <path>HLT_IsoMu20_v.*</path>
+        <path>HLT_IsoTkMu20_v.*</path>
+        <!-- Single el data -->
+        <path>HLT_Ele23_WPLoose_Gsf.*</path>
+        <!-- Single el MC -->
+        <path>HLT_Ele23_CaloIdL_TrackIdL_IsoVL.*</path>
+    </runs>
+</triggers>
+

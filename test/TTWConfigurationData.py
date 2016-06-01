@@ -25,9 +25,9 @@ def makeCategoryParams():
                     , NMuons     = cms.uint32(sum( 1 for l in (l1,l2) if l == "Mu" ))
                     , Category   = cms.string("is{0}".format(flav))
                     , HLT        = cms.vstring(triggersPerChannel[flav])
-                    , Cuts       = cms.vstring(
-                                        "Mll:__:p4.M > 20"
-                                      , "ZVeto:__:( p4.M < 76 ) || ( p4.M > 116 )"
+                    , Cuts       = cms.VPSet(
+                                        cms.PSet(Mll   = cms.string("p4.M > 20"))
+                                      , cms.PSet(ZVeto = cms.string("( p4.M < 76 ) || ( p4.M > 116 )"))
                                       )
                     )
             categs["{0}OS".format(flav)]    = base.clone(Charge=cms.int32( 0), Category=cms.string("is{0} && isOS".format(flav)))

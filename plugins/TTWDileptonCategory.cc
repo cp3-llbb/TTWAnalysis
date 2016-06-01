@@ -1,7 +1,6 @@
-#include "cp3_llbb/Framework/interface/MuonsProducer.h"
-#include "cp3_llbb/Framework/interface/ElectronsProducer.h"
 #include "cp3_llbb/Framework/interface/HLTProducer.h"
 #include "cp3_llbb/TTWAnalysis/interface/TTWAnalyzer.h"
+#include "cp3_llbb/TTWAnalysis/interface/CandidatesProducer.h"
 
 #include "cp3_llbb/TTWAnalysis/interface/TTWDileptonCategory.h"
 
@@ -12,21 +11,6 @@
 
 using namespace TTWAnalysis;
 
-namespace {
-  std::vector<std::string> splitBySubString( const std::string& input, const std::string& delim )
-  {
-    std::vector<std::string> parts;
-    boost::iter_split(parts, input, boost::algorithm::first_finder(delim));
-    return parts;
-  }
-  std::pair<std::string,std::string> parseNamedCut( const std::string& val )
-  {
-    auto parts = splitBySubString(val, ":__:");
-    assert(parts.size() == 2);
-    return std::make_pair(parts[0], parts[1]);
-  }
-}
-
 GDileptonCategory::GDileptonCategory()
  : Category()
  , m_llIsInCateg("")
@@ -36,31 +20,27 @@ GDileptonCategory::~GDileptonCategory() {}
 
 void GDileptonCategory::configure(const edm::ParameterSet& conf)
 {
+  using NamedDiLeptonCut = std::pair<std::string,DiLeptonCut>;
   // pre-ana in category
   m_nReqEl = conf.getParameter<unsigned int>("NElectrons");
   m_nReqMu = conf.getParameter<unsigned int>("NMuons");
   m_reqCh  = conf.getParameter<int>("Charge");
+  // working points
+  m_llWPs = conf.getParameter<std::vector<std::string>>("WPs");
   // post-ana in category
   m_llIsInCateg = DiLeptonHybridCut(conf.getParameter<std::string>("Category"));
   // post-ana cuts
   m_postCuts.clear();
-  m_postCuts.emplace_back(std::pair<std::string,DiLeptonCut>("Category", m_llIsInCateg));
-  m_hltMatcher.addRegex(conf.getParameter<std::vector<std::string>>("HLT"));
-  m_postCuts.emplace_back(std::pair<std::string,DiLeptonCut>("DiLeptonTriggerMatch", std::reference_wrapper<DiLeptonHLTMatch>(m_hltMatcher)));
-  for ( const auto& otherCutStr : conf.getParameter<std::vector<std::string>>("Cuts") ) {
-    auto parsedCut = parseNamedCut(otherCutStr);
-    m_postCuts.emplace_back(std::pair<std::string,DiLeptonCut>(parsedCut.first, DiLeptonHybridCut(parsedCut.second)));
+  m_postCuts.emplace_back(NamedDiLeptonCut("Category", m_llIsInCateg));
+  const auto& triggers = conf.getParameter<std::vector<std::string>>("HLT");
+  if ( ! triggers.empty() ) {
+    m_hltMatcher.addRegex(triggers);
+    m_postCuts.emplace_back(NamedDiLeptonCut("DiLeptonTriggerMatch", std::reference_wrapper<HLTMatch<TTWAnalysis::DiLepton>>(m_hltMatcher)));
   }
-
-  // construct IDIso combinations (and postfix strings)
-  m_idIsoCombAndPostfix.clear();
-  for ( const LepID::LepID& id1 : LepID::it ) {
-    for ( const LepID::LepID& id2 : LepID::it ) {
-      for ( const LepIso::LepIso& iso1 : LepIso::it ) {
-        for ( const LepIso::LepIso& iso2 : LepIso::it ) {
-          m_idIsoCombAndPostfix.push_back(std::make_pair(LepLepIDIso(id1, iso1, id2, iso2), "_"+LepLepIDIsoStr(id1, iso1, id2, iso2)));
-        }
-      }
+  for ( const auto& otherCutConfig : conf.getParameter<edm::VParameterSet>("Cuts") ) {
+    assert(otherCutConfig.getParameterNames().size() == 1);
+    for ( const std::string& otherCutName : otherCutConfig.getParameterNames() ) {
+      m_postCuts.emplace_back(NamedDiLeptonCut(otherCutName, DiLeptonHybridCut(otherCutConfig.getParameter<std::string>(otherCutName))));
     }
   }
 }
@@ -69,22 +49,22 @@ bool GDileptonCategory::event_in_category_pre_analyzers(const ProducersManager& 
 {
   unsigned int nPass;
   if ( m_nReqEl > 0 ) {
-    const auto& electrons = producers.get<ElectronsProducer>("electrons");
+    const auto& electrons = producers.get<CandidatesProducer<pat::Electron>>("electrons").selected();
     if ( m_reqCh != 0 ) {
-      nPass = std::count_if(std::begin(electrons.charge), std::end(electrons.charge), [this] ( int8_t ch ) { return m_reqCh == ch; });
+      nPass = std::count_if(std::begin(electrons), std::end(electrons), [this] ( const edm::Ptr<pat::Electron> el ) { return m_reqCh == el->charge(); });
     } else {
-      nPass = electrons.p4.size();
+      nPass = electrons.size();
     }
     if ( nPass < m_nReqEl ) {
       return false;
     }
   }
   if ( m_nReqMu > 0 ) {
-    const auto& muons = producers.get<MuonsProducer>("muons");
+    const auto& muons = producers.get<CandidatesProducer<pat::Muon>>("muons").selected();
     if ( m_reqCh != 0 ) {
-      nPass = std::count_if(std::begin(muons.charge), std::end(muons.charge), [this] ( int8_t ch ) { return m_reqCh == ch; });
+      nPass = std::count_if(std::begin(muons), std::end(muons), [this] ( const edm::Ptr<pat::Muon> mu ) { return m_reqCh == mu->charge(); });
     } else {
-      nPass = muons.p4.size();
+      nPass = muons.size();
     }
     if ( nPass < m_nReqMu ) {
       return false;
@@ -95,12 +75,14 @@ bool GDileptonCategory::event_in_category_pre_analyzers(const ProducersManager& 
 
 bool GDileptonCategory::diLeptonIsInCategory( const TTWAnalyzer* ttW, uint16_t dilepIdx ) const
 {
-  if ( m_llIsInCateg(ttW->diLeptons[dilepIdx]) ) {
+  const auto& dilep = ttW->getObjList<TTWAnalysis::DiLepton>()[dilepIdx];
+  const auto& leptons = ttW->getObjList<TTWAnalysis::Lepton>();
+  if ( m_llIsInCateg(dilep) ) {
     if ( m_reqCh == 0 ) {
       return true;
     } else {
-      if ( ( m_reqCh == ttW->leptons[ttW->diLeptons[dilepIdx].lidxs.first].charge )
-        && ( m_reqCh == ttW->leptons[ttW->diLeptons[dilepIdx].lidxs.second].charge ) ) {
+      if ( ( m_reqCh == leptons[dilep.lidxs.first].charge() )
+        && ( m_reqCh == leptons[dilep.lidxs.second].charge() ) ) {
         return true;
       }
     }
@@ -111,9 +93,8 @@ bool GDileptonCategory::diLeptonIsInCategory( const TTWAnalyzer* ttW, uint16_t d
 bool GDileptonCategory::event_in_category_post_analyzers(const ProducersManager& producers, const AnalyzersManager& analyzers) const
 {
   const TTWAnalyzer& ttW = analyzers.get<TTWAnalyzer>("ttW");
-
-  for ( const auto& combAndPostfix : m_idIsoCombAndPostfix ) {
-    const auto& catDiLeptons = ttW.diLeptons_IDIso[combAndPostfix.first];
+  for ( const auto& sel : m_llWPs ) {
+    const auto& catDiLeptons = ttW.selectedDiLeptons(sel);
     if ( ( ! catDiLeptons.empty() )
       && ( std::any_of(std::begin(catDiLeptons), std::end(catDiLeptons),
                   std::bind(&GDileptonCategory::diLeptonIsInCategory, this, &ttW, std::placeholders::_1)
@@ -126,9 +107,9 @@ bool GDileptonCategory::event_in_category_post_analyzers(const ProducersManager&
 
 void GDileptonCategory::register_cuts(CutManager& manager)
 {
-  for ( const auto& combAndPostfix : m_idIsoCombAndPostfix ) {
+  for ( const auto& sel : m_llWPs ) {
     for ( const auto& cut : m_postCuts ) {
-      manager.new_cut(cut.first+combAndPostfix.second, cut.first+combAndPostfix.second);
+      manager.new_cut(cut.first+"_"+sel, cut.first+"_"+sel);
     }
   }
 }
@@ -136,44 +117,26 @@ void GDileptonCategory::register_cuts(CutManager& manager)
 void GDileptonCategory::evaluate_cuts_post_analyzers(CutManager& manager, const ProducersManager& producers, const AnalyzersManager& analyzers) const {
 
   const TTWAnalyzer& ttW = analyzers.get<TTWAnalyzer>("ttW");
+  const auto& diLeptons = ttW.getObjList<TTWAnalysis::DiLepton>();
   m_hltMatcher.setHLTProd(&producers.get<HLTProducer>("hlt"));
 
-  for ( const auto& combAndPostfix : m_idIsoCombAndPostfix ) {
-    if ( ! ttW.diLeptons_IDIso[combAndPostfix.first].empty() ) {
+  for ( const auto& sel : m_llWPs ) {
+    if ( ! ttW.selectedDiLeptons(sel).empty() ) {
+      const auto& sel_before_cat = ttW.selectedDiLeptons(sel);
       std::vector<uint16_t> sel_dileptons;
-      sel_dileptons.reserve(ttW.diLeptons.size());
-      std::copy_if(std::begin(ttW.diLeptons_IDIso[combAndPostfix.first]), std::end(ttW.diLeptons_IDIso[combAndPostfix.first]),
-                   std::back_inserter(sel_dileptons), std::bind(&GDileptonCategory::diLeptonIsInCategory, this, &ttW, std::placeholders::_1));
+      sel_dileptons.reserve(sel_before_cat.size());
+      std::copy_if(std::begin(sel_before_cat), std::end(sel_before_cat), std::back_inserter(sel_dileptons),
+                   std::bind(&GDileptonCategory::diLeptonIsInCategory, this, &ttW, std::placeholders::_1));
       for ( const auto& cut : m_postCuts ) {
         std::vector<uint16_t> passSel_dileptons;
         passSel_dileptons.reserve(sel_dileptons.size());
         std::copy_if(std::begin(sel_dileptons), std::end(sel_dileptons), std::back_inserter(passSel_dileptons),
-                    [&ttW,&cut] ( uint16_t idx ) -> bool { return cut.second(ttW.diLeptons[idx]); }
+                    [&diLeptons,&cut] ( uint16_t idx ) -> bool { return cut.second(diLeptons[idx]); }
                 );
         if ( ! passSel_dileptons.empty() ) {
-          manager.pass_cut(cut.first+combAndPostfix.second);
+          manager.pass_cut(cut.first+"_"+sel);
         }
       }
     }
   }
-}
-
-bool GDileptonCategory::DiLeptonHLTMatch::operator() ( const TTWAnalysis::DiLepton& diLep ) const
-{
-  if ( ( ! m_hltProd )
-    || ( diLep.hlt_idxs.first  < 0 ) || ( diLep.hlt_idxs.first  >= int(m_hltProd->object_paths.size()) )
-    || ( diLep.hlt_idxs.second < 0 ) || ( diLep.hlt_idxs.second >= int(m_hltProd->object_paths.size()) ) )
-  { return false; }
-
-  std::vector<std::string> mObj1, mObj2, mComm;
-  for ( const auto& paths : m_regex ) {
-    const auto& objp1 = m_hltProd->object_paths[diLep.hlt_idxs.first];
-    std::copy_if(std::begin(objp1), std::end(objp1), std::back_inserter(mObj1),
-        [&paths] ( const std::string& obj ) { return boost::regex_match(obj, paths); } );
-    const auto& objp2 = m_hltProd->object_paths[diLep.hlt_idxs.second];
-    std::copy_if(std::begin(objp2), std::end(objp2), std::back_inserter(mObj2),
-        [&paths] ( const std::string& obj ) { return boost::regex_match(obj, paths); } );
-  }
-  std::set_intersection(std::begin(mObj1), std::end(mObj1), std::begin(mObj2), std::end(mObj2), std::back_inserter(mComm));
-  return ! mComm.empty();
 }

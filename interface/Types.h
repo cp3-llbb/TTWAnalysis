@@ -34,6 +34,7 @@ namespace TTWAnalysis {
     int32_t pruned_idx;
   };
 
+  /*
   struct Lepton: BaseObject {
     Lepton():
       ID(LepID::Count, false),
@@ -209,6 +210,7 @@ namespace TTWAnalysis {
     float minDPhi_l_Met, minDPhi_j_Met;
     float maxDPhi_l_Met, maxDPhi_j_Met;
   };
+  */
 
 }
 
