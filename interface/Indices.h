@@ -98,4 +98,48 @@ namespace TTWAnalysis {
     Dileptonic_etau
   };
 
+  enum WDecayType {
+    UnknownW = -1,
+    NotW = 0,
+    HadronicW,
+    LeptonicW_e,
+    LeptonicW_mu,
+    // With tau
+    LeptonicW_tau,
+  };
+
+  enum TTWDecayType {
+    UnknownTTW = -1,
+    NotTTW = 0,
+    HadronicTTW,
+    SingleLeptonW,
+    SingleLeptonTT,
+    DiLeptonTT,
+    DiLeptonWOST,
+    DiLeptonWSST,
+    TriLepton
+  };
+  enum TTWLeptonCombo {
+    ZeroLepton=0,
+    Single_e,
+    Single_mu,
+    Di_ee,
+    Di_emu,
+    Di_mumu,
+    Tri_eee,
+    Tri_eemu,
+    Tri_emumu,
+    Tri_mumumu,
+    // with tau
+    Single_tau,
+    Di_etau,
+    Di_mutau,
+    Di_tautau,
+    Tri_eetau,
+    Tri_emutau,
+    Tri_etautau,
+    Tri_mumutau,
+    Tri_mutautau,
+    Tri_tautautau
+  };
 }

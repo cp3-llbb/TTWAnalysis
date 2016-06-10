@@ -72,6 +72,7 @@ private:
 
   const float m_hltDRCut, m_hltDPtCut;
 
+  mutable edm::EventID m_lastEvent;
   mutable std::vector<std::string> m_paths;
   // mutable std::vector<uint16_t> m_prescales;
 
@@ -197,10 +198,12 @@ Dict DictHLTMatchv2<Candidate>::evaluate(const Candidate& cand,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
   std::vector<FilteredObject> triggerObjects;
-  if ( event ) {
-    // TODO room for optimisation
-    readTriggerNamesAndPrescales(event);
+  if ( event && ( m_lastEvent != event->id() ) ) {
+    if ( m_lastEvent.run() != event->id().run() ) {
+      readTriggerNamesAndPrescales(event);
+    }
     triggerObjects = collectTriggerObjects(event);
+    m_lastEvent = event->id();
   }
 
   Dict ret{};

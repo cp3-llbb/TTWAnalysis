@@ -169,6 +169,11 @@ framework.addAnalyzer('fillLists', cms.PSet(
                             ea_R03 = cms.untracked.FileInPath("RecoEgamma/ElectronIdentification/data/PHYS14/effAreaElectrons_cone03_pfNeuHadronsAndPhotons.txt"),
                             ea_R04 = cms.untracked.FileInPath("cp3_llbb/Framework/data/effAreaElectrons_cone04_pfNeuHadronsAndPhotons.txt")
                             )),
+                        MiniIso=cms.PSet(type=cms.string("ttw_electronMiniIso"), parameters=cms.PSet(
+                            ea=cms.untracked.FileInPath("RecoEgamma/ElectronIdentification/data/Spring15/effAreaElectrons_cone03_pfNeuHadronsAndPhotons_25ns.txt"),
+                            rho=cms.untracked.InputTag("fixedGridRhoFastjetCentralNeutral"),
+                            packedCandidates=cms.InputTag("packedPFCandidates"),
+                            )),
                         SF =cms.PSet(type=cms.string("ttw_electronSF" ), parameters=cms.PSet(scale_factors=cms.untracked.PSet(
                             id_veto   = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Electron_CutBasedID_VetoWP_fromTemplates_withSyst_76X.json'),
                             id_loose  = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Electron_CutBasedID_LooseWP_fromTemplates_withSyst_76X.json'),
@@ -176,6 +181,17 @@ framework.addAnalyzer('fillLists', cms.PSet(
                             id_tight  = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Electron_CutBasedID_TightWP_fromTemplates_withSyst_76X.json'),
                             hww_wp    = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Electrons_HWW_CutBasedID_TightWP_fromTemplates_withSyst_v1_reco_id_iso.json'),
                             ))),
+                        MVAttH=cms.PSet(type=cms.string("ttw_electronMVAttH"), parameters=cms.PSet(
+                            ## for matching jet
+                            JetLeptonDR=cms.double(.4),
+                            Jets=cms.InputTag("slimmedJets"),
+                            ## for mini-isolation
+                            packedCandidates=cms.InputTag("packedPFCandidates"),
+                            ea=cms.FileInPath("RecoEgamma/ElectronIdentification/data/Spring15/effAreaElectrons_cone03_pfNeuHadronsAndPhotons_25ns.txt"),
+                            rho=cms.untracked.InputTag("fixedGridRhoFastjetCentralNeutral"),
+                            ## BDT weights
+                            WeightsFile=cms.FileInPath("cp3_llbb/TTWAnalysis/data/forMoriond16_el_sigTTZ_bkgTT_BDTG.weights.xml"),
+                            )),
                         )
                     )),
             Muons    =cms.PSet(type=cms.string("ttw_muonsanalyzerhelper"), prefix=cms.string("muon_"),
@@ -191,6 +207,11 @@ framework.addAnalyzer('fillLists', cms.PSet(
                             ea_R03=cms.untracked.FileInPath("cp3_llbb/Framework/data/effAreaMuons_cone03_pfNeuHadronsAndPhotons.txt"),
                             ea_R04=cms.untracked.FileInPath("cp3_llbb/Framework/data/effAreaMuons_cone04_pfNeuHadronsAndPhotons.txt"),
                             )),
+                        MiniIso=cms.PSet(type=cms.string("ttw_muonMiniIso"), parameters=cms.PSet(
+                            ea=cms.untracked.FileInPath("cp3_llbb/TTWAnalysis/data/effAreaMuons_cone03_pfNeuHadronsAndPhotons_Spring15_25ns.txt"),
+                            rho=cms.untracked.InputTag("fixedGridRhoFastjetCentralNeutral"),
+                            packedCandidates=cms.InputTag("packedPFCandidates"),
+                            )),
                         SF =cms.PSet(type=cms.string("ttw_muonSF" ), parameters=cms.PSet(scale_factors=cms.untracked.PSet(
                             id_soft   = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Muon_SoftID_genTracks_id.json'),
                             id_loose  = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Muon_LooseID_genTracks_id.json'),
@@ -204,6 +225,17 @@ framework.addAnalyzer('fillLists', cms.PSet(
                             id_hww              = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Muon_MediumID_Data_MC_25ns_PTvsETA_HWW_76.json'),
                             iso_tight_id_hww    = cms.untracked.FileInPath('cp3_llbb/Framework/data/ScaleFactors/Muon_ISOTight_Data_MC_25ns_PTvsETA_HWW.json'),
                             ))),
+                        MVAttH=cms.PSet(type=cms.string("ttw_muonMVAttH"), parameters=cms.PSet(
+                            ## for matching jet
+                            JetLeptonDR=cms.double(.4),
+                            Jets=cms.InputTag("slimmedJets"),
+                            ## for mini-isolation
+                            packedCandidates=cms.InputTag("packedPFCandidates"),
+                            ea=cms.FileInPath("cp3_llbb/TTWAnalysis/data/effAreaMuons_cone03_pfNeuHadronsAndPhotons_Spring15_25ns.txt"),
+                            rho=cms.untracked.InputTag("fixedGridRhoFastjetCentralNeutral"),
+                            ## BDT weights
+                            WeightsFile=cms.FileInPath("cp3_llbb/TTWAnalysis/data/forMoriond16_mu_sigTTZ_bkgTT_BDTG.weights.xml"),
+                            )),
                         )
                     )),
             Jets     =cms.PSet(type=cms.string("ttw_jetsanalyzerhelper"), prefix=cms.string("jet_"),
@@ -298,9 +330,9 @@ framework.addAnalyzer('fillLists', cms.PSet(
         )
     ))
 
-framework.addAnalyzer('ttTruth', cms.PSet(
-        type = cms.string('tttruth_analyzer'),
-        prefix = cms.string('ttTruth_'),
+framework.addAnalyzer('ttWTruth', cms.PSet(
+        type = cms.string('ttwtruth_analyzer'),
+        prefix = cms.string(''),
         enable = cms.bool(True),
         parameters = cms.PSet(
             TTWAnalyzer=cms.string("ttW"),

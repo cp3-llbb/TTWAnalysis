@@ -13,6 +13,8 @@
 
 #include "RecoEgamma/EgammaTools/interface/EffectiveAreas.h"
 
+#include "Helpers.h"
+
 namespace TTWAnalysis {
 /**
  * Lepton iso (like LeptonsProducer)
@@ -46,28 +48,6 @@ protected:
 private:
   // Effective areas
   std::map<std::string,EffectiveAreas> m_ea;
-};
-
-/**
- * Small helper to access rho
- */
-class DictRhoHelper {
-public:
-  DictRhoHelper(const edm::ParameterSet& config) {}
-  void doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
-  {
-    m_rho_token = collector.consumes<double>(config.getUntrackedParameter<edm::InputTag>("rho",
-                                             edm::InputTag("fixedGridRhoFastjetAll")));
-  }
-protected:
-  double getRho(const edm::Event* event) const
-  {
-    edm::Handle<double> handle;
-    event->getByToken(m_rho_token, handle);
-    return *handle;
-  }
-private:
-  edm::EDGetTokenT<double> m_rho_token;
 };
 
 /**

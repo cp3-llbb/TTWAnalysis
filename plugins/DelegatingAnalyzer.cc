@@ -48,8 +48,9 @@ TTWAnalysis::DelegatingAnalyzer::~DelegatingAnalyzer() {}
 
 void TTWAnalysis::DelegatingAnalyzer::doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
 {
+  const edm::ParameterSet& helperConfigs = config.getParameter<edm::ParameterSet>("Helpers");
   for ( auto& hlp : m_helpers ) {
-    hlp->doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
+    hlp->doConsumes(helperConfigs.getParameter<edm::ParameterSet>(hlp->name()).getParameter<edm::ParameterSet>("parameters"), std::forward<edm::ConsumesCollector>(collector));
   }
 }
 

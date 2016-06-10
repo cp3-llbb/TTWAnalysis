@@ -27,18 +27,18 @@ namespace TTWAnalysis {
         const edm::ParameterSet& dictConfigs = config.getParameter<edm::ParameterSet>("DictTools");
         for ( const std::string& dictToolName : dictConfigs.getParameterNames() ) {
           const auto& dictToolConfig = dictConfigs.getParameter<edm::ParameterSet>(dictToolName);
+          std::string dictType{dictToolConfig.getParameter<std::string>("type")};
+          const auto& dictParams = dictToolConfig.getParameter<edm::ParameterSet>("parameters");
           this->m_dicts.emplace_back(
-            DictTool<PatObject>::factory::get()->create(
-                dictToolConfig.getParameter<std::string>("type")
-              , dictToolConfig.getParameter<edm::ParameterSet>("parameters")
-              ));
+                  std::unique_ptr<DictTool<PatObject>>{DictTool<PatObject>::factory::get()->create(dictType, dictParams)}
+                , dictParams);
           LogDebug("ttW") << m_dicts.size()-1 << " : " << dictToolName;
         }
         // initialize branch-ref-group for each dict based on that
         std::transform(std::begin(this->m_dicts), std::end(this->m_dicts), std::back_inserter(this->m_branchesRefs),
-            [this] ( const std::unique_ptr<DictTool<PatObject>>& tool ) {
+            [this] ( const DictHolder& tool ) {
               PatObject tmp{};
-              return BranchRefsHolder(m_tree, tool->evaluate(tmp));
+              return BranchRefsHolder(m_tree, tool.first->evaluate(tmp));
             });
       }
 
@@ -48,7 +48,7 @@ namespace TTWAnalysis {
       {
         AnalyzerHelper::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
         for ( auto& idct : this->m_dicts ) {
-          idct->doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
+          idct.first->doConsumes(idct.second, std::forward<edm::ConsumesCollector>(collector));
         }
       }
 
@@ -59,7 +59,7 @@ namespace TTWAnalysis {
         for ( std::size_t iO{0}; candAcc.size() != iO; ++iO ) {
           for ( std::size_t iT{0}; this->m_dicts.size() != iT; ++iT ) {
             LogDebug("ttW") << "Calling dict tool #" << iT;
-            this->m_branchesRefs[iT].addDict(this->m_dicts[iT]->evaluate(candAcc[iO], &event, &eventSetup, &prodMgr, &anaMgr, &catMgr));
+            this->m_branchesRefs[iT].addDict(this->m_dicts[iT].first->evaluate(candAcc[iO], &event, &eventSetup, &prodMgr, &anaMgr, &catMgr));
           }
         }
       }
@@ -67,7 +67,8 @@ namespace TTWAnalysis {
     private:
       ROOT::TreeGroup m_tree;
       std::string m_ttWName;
-      std::vector<std::unique_ptr<DictTool<PatObject>>> m_dicts;
+      using DictHolder = std::pair<std::unique_ptr<DictTool<PatObject>>,edm::ParameterSet>;
+      std::vector<DictHolder> m_dicts;
 
       /*
        * Ref to a vector branch (interface taking boost::any)

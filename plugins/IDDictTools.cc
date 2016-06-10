@@ -12,32 +12,9 @@
 #include "cp3_llbb/Framework/interface/Types.h"
 #include "cp3_llbb/TTWAnalysis/interface/DictTool.h"
 
+#include "Helpers.h"
+
 namespace TTWAnalysis {
-/**
- * Small helper to access the primary vertex
- */
-class DictPVHelper {
-public:
-  DictPVHelper(const edm::ParameterSet& config) {}
-  void doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
-  {
-    m_vertices_token = collector.consumes<std::vector<reco::Vertex>>(config.getUntrackedParameter<edm::InputTag>("vertices", edm::InputTag("offlineSlimmedPrimaryVertices")));
-  }
-protected:
-  const reco::Vertex* getPV(const edm::Event* event) const
-  {
-    edm::Handle<std::vector<reco::Vertex>> handle;
-    event->getByToken(m_vertices_token, handle);
-    if ( ! handle->empty() ) {
-      return &(handle->at(0));
-    }
-    return nullptr;
-  }
-private:
-  edm::EDGetTokenT<std::vector<reco::Vertex>> m_vertices_token;
-};
-
-
 /**
  * Additional electron identification variables
  */
