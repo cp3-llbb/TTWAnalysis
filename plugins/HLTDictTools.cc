@@ -75,6 +75,7 @@ private:
   mutable edm::EventID m_lastEvent;
   mutable std::vector<std::string> m_paths;
   // mutable std::vector<uint16_t> m_prescales;
+  mutable std::vector<FilteredObject> m_triggerObjects;
 
   void readTriggerNamesAndPrescales( const edm::Event* event ) const
   {
@@ -113,8 +114,10 @@ private:
     std::sort(std::begin(m_paths), std::end(m_paths));
   }
 
-  std::vector<FilteredObject> collectTriggerObjects( const edm::Event* event ) const
+  void collectTriggerObjects( const edm::Event* event ) const
   {
+    m_triggerObjects.clear();
+
     edm::Handle<edm::TriggerResults> hlt;
     event->getByToken(m_hlt_token, hlt);
     const edm::TriggerNames& triggerNames = event->triggerNames(*hlt);
@@ -138,11 +141,10 @@ private:
           std::vector<std::string> filtered_paths;
           std::set_intersection(m_paths.begin(), m_paths.end(), object_paths.begin(), object_paths.end(), std::back_inserter(filtered_paths));
 
-          result.emplace_back(obj, filtered_paths);
+          m_triggerObjects.emplace_back(obj, filtered_paths);
         }
       }
     }
-    return result;
   }
 };
 
@@ -197,18 +199,15 @@ Dict DictHLTMatchv2<Candidate>::evaluate(const Candidate& cand,
     const edm::Event* event, const edm::EventSetup* /**/,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
-  std::vector<FilteredObject> triggerObjects;
   if ( event && ( m_lastEvent != event->id() ) ) {
-    if ( m_lastEvent.run() != event->id().run() ) {
-      readTriggerNamesAndPrescales(event);
-    }
-    triggerObjects = collectTriggerObjects(event);
+    readTriggerNamesAndPrescales(event);
+    collectTriggerObjects(event);
     m_lastEvent = event->id();
   }
 
   Dict ret{};
   for ( const auto& selection : m_selections ) {
-    ret.add(selection.first, hasHLTCandidateMatch<Candidate>(cand, triggerObjects, selection.second, m_hltDRCut, m_hltDPtCut));
+    ret.add(selection.first, hasHLTCandidateMatch<Candidate>(cand, m_triggerObjects, selection.second, m_hltDRCut, m_hltDPtCut));
   }
   return ret;
 }

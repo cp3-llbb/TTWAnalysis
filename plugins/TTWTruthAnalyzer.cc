@@ -768,7 +768,7 @@ void TTWTruthAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& s
 #if TT_GEN_DEBUG
       std::cout << "Leptonic W decay" << std::endl;
 #endif
-      int16_t lepton_pdg_id = std::abs(gen_lepton_W);
+      uint16_t lepton_pdg_id = std::abs(genParticles[gen_lepton_W].pdg_id);
       if ( lepton_pdg_id == 11 ) {
         gen_W_decay_type = LeptonicW_e;
       } else if ( lepton_pdg_id == 13 ) {
