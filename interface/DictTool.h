@@ -12,10 +12,16 @@ namespace edm {
   class ConsumesCollector;
   class Event;
   class EventSetup;
+  template<class T> class Ptr;
 };
 class ProducersManager;
 class AnalyzersManager;
 class CategoryManager;
+namespace pat {
+  class Muon;
+  class Electron;
+  class Jet;
+};
 
 namespace TTWAnalysis {
   /*
@@ -42,6 +48,16 @@ namespace TTWAnalysis {
       std::vector<entry> m_data;
   };
 
+  template<class T>
+  class dict_argument_traits {
+  public:
+    using argument_type = const T&;
+  };
+  // specializations for pat:: objects
+  template<> class dict_argument_traits<class pat::Muon>     { public: using argument_type = edm::Ptr<pat::Muon    >; };
+  template<> class dict_argument_traits<class pat::Electron> { public: using argument_type = edm::Ptr<pat::Electron>; };
+  template<> class dict_argument_traits<class pat::Jet>      { public: using argument_type = edm::Ptr<pat::Jet     >; };
+
   /*
    * Fill a list of values for an object
    *
@@ -50,7 +66,7 @@ namespace TTWAnalysis {
   template<class PatObject>
   class DictTool {
     public:
-      using element_type = PatObject;
+      using argument_type = typename dict_argument_traits<PatObject>::argument_type;
 
       explicit DictTool(const edm::ParameterSet& config) {}
 
@@ -59,7 +75,7 @@ namespace TTWAnalysis {
       virtual void doConsumes(const edm::ParameterSet&, edm::ConsumesCollector&&) {}
 
       // interface method
-      virtual Dict evaluate(const PatObject&, const edm::Event* = nullptr, const edm::EventSetup* = nullptr, const ProducersManager* = nullptr, const AnalyzersManager* = nullptr, const CategoryManager* = nullptr) const = 0;
+      virtual Dict evaluate(argument_type, const edm::Event* = nullptr, const edm::EventSetup* = nullptr, const ProducersManager* = nullptr, const AnalyzersManager* = nullptr, const CategoryManager* = nullptr) const = 0;
 
       using factory = edmplugin::PluginFactory<DictTool<PatObject>* (const edm::ParameterSet&)>;
   };

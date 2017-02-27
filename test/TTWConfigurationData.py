@@ -5,10 +5,10 @@ from cp3_llbb.Framework import Framework
 
 from cp3_llbb.TTWAnalysis.Configuration import addTTWAnalyzer, addTTWCandidatesAnalyzer, customizeProducers
 
-globalTag_ = '76X_dataRun2_16Dec2015_v0'
+globalTag_ = "80X_dataRun2_2016SeptRepro_v7"
 processName_ = 'RECO'
 
-framework = Framework.Framework(True, eras.Run2_25ns, globalTag=globalTag_, processName=processName_)
+framework = Framework.Framework(True, eras.Run2_2016, globalTag=globalTag_, processName=processName_)
 
 ## ANALYZERS
 addTTWAnalyzer          (framework) ## make candidates
@@ -17,7 +17,7 @@ addTTWCandidatesAnalyzer(framework) ## fill most branches
 ## PRODUCERS
 customizeProducers(framework)
 
-# framework.redoJEC()
+framework.redoJEC()
 # framework.smearJets()
 # framework.doSystematics(['jec', 'jer'])
 framework.doSystematics([])

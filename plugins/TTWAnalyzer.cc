@@ -128,7 +128,7 @@ TTWAnalyzer::TTWAnalyzer(const std::string& name, const ROOT::TreeGroup& tree_, 
   m_jetPUID( config.getUntrackedParameter<double>("jetPUID", std::numeric_limits<float>::min()) ),
   m_jetDRleptonCut( config.getUntrackedParameter<double>("jetDRleptonCut", 0.3) ),
 
-  m_jetBTagName( config.getUntrackedParameter<std::string>("bTagName", "pfCombinedInclusiveSecondaryVertexV2BJetTags") ),
+  m_jetBTagName( config.getParameter<std::string>("bTagName") ),
 
   m_hltDRCut( config.getUntrackedParameter<double>("hltDRCut", std::numeric_limits<float>::max()) ),
   m_hltDPtCut( config.getUntrackedParameter<double>("hltDPtCut", std::numeric_limits<float>::max()) )
@@ -179,6 +179,10 @@ TTWAnalyzer::TTWAnalyzer(const std::string& name, const ROOT::TreeGroup& tree_, 
 void TTWAnalyzer::doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
 {
   m_vertices_token = collector.consumes<std::vector<reco::Vertex>>(config.getUntrackedParameter<edm::InputTag>("vertices", edm::InputTag("offlineSlimmedPrimaryVertices")));
+  const edm::ParameterSet& elVidCfg = config.getParameter<edm::ParameterSet>("electronVIDs");
+  for ( const std::string& name : elVidCfg.getParameterNames() ) {
+    m_el_vidTokens.emplace_back(std::make_pair(name, collector.consumes<edm::ValueMap<bool>>(elVidCfg.getParameter<edm::InputTag>(name))));
+  }
 }
 
 void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup, const ProducersManager& producers, const AnalyzersManager& analyzers, const CategoryManager& categories)
@@ -201,12 +205,35 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
 
   LogDebug("ttW") << "Electrons";
 
+  //
+  std::vector<edm::Handle<edm::ValueMap<bool>>> el_vids;
+  std::for_each(std::begin(m_el_vidTokens), std::end(m_el_vidTokens),
+      [&event,&el_vids] ( const auto& nmAndTok ) {
+        edm::Handle<edm::ValueMap<bool>> handle;
+        event.getByToken(nmAndTok.second, handle);
+        el_vids.emplace_back(std::move(handle));
+      });
+  //
+
   using ElectronsProducer = TTWAnalysis::CandidatesProducer<pat::Electron>;
   m_electrons = producers.get<ElectronsProducer>(m_electrons_producer).selected();
   for ( std::size_t i{0}; m_electrons.size() != i; ++i ) {
     auto iEl = m_electrons[i];
     if ( ( iEl->pt() > m_electronPtCut ) && ( std::abs(iEl->eta()) < m_electronEtaCut ) ) {
       m_leptons.emplace_back(i, iEl);
+    }
+    { // TODO consider putting this elsewhere
+      pat::Electron* elNonConst = const_cast<pat::Electron*>(iEl.get());
+      for ( std::size_t i{0}; i != el_vids.size(); ++i ) {
+        try {
+          elNonConst->addUserInt(m_el_vidTokens[i].first, ( (*(el_vids[i]))[iEl] ) ? 1 : 0);
+        } catch ( const edm::Exception& e ) {
+          std::stringstream msg;
+          msg << "Problem getting id '" << m_el_vidTokens[i].first << "' for electron " << iEl.key() << " from " << iEl.id();
+          throw edm::Exception(edm::errors::InvalidReference, msg.str());
+        }
+        LogDebug("ttW-electronID") << "Electron ID " << m_el_vidTokens[i].first << " for electron " << iEl.key() << " from " << iEl.id() << " : " << (*(el_vids[i]))[iEl] << " (" << el_vids[i]->size() << " in map)";
+      }
     }
   }
   for ( decltype(m_idxElWP)::iterator ielWP{m_idxElWP.begin()}; m_idxElWP.end() != ielWP; ++ielWP ) {
@@ -226,7 +253,10 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
     if ( ( iMu->pt() > m_muonPtCut ) && ( std::abs(iMu->eta()) < m_muonEtaCut ) ) {
       m_leptons.emplace_back(i, iMu);
     }
-    const_cast<pat::Muon*>(iMu.get())->addUserInt("tightMuonID", iMu->isTightMuon(pv)); // TODO consider putting this elsewhere
+    { // TODO consider putting this elsewhere
+      pat::Muon* muNonConst = const_cast<pat::Muon*>(iMu.get());
+      muNonConst->addUserInt("tightMuonID", iMu->isTightMuon(pv));
+    }
   }
   for ( decltype(m_idxMuWP)::iterator imuWP{m_idxMuWP.begin()}; m_idxMuWP.end() != imuWP; ++imuWP ) {
     for ( std::size_t i{0}; m_muons.size() != i; ++i ) {

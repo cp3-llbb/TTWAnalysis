@@ -23,14 +23,15 @@ public:
   DictKinematic(const edm::ParameterSet& config) : DictTool<RecoCandidate>(config) {}
   virtual ~DictKinematic() {}
 
-  virtual Dict evaluate(const RecoCandidate& cand,
+  virtual Dict evaluate(edm::Ptr<RecoCandidate> cand,
       const edm::Event* /**/, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
+    const bool valid{cand.isNonnull()};
     Dict ret{};
-    ret.add("p4", LorentzVector(cand.pt(), cand.eta(), cand.phi(), cand.energy()));
-    ret.add("y" , cand.rapidity());
-    ret.add("charge", cand.charge());
+    ret.add("p4", valid ? LorentzVector(cand->pt(), cand->eta(), cand->phi(), cand->energy()) : LorentzVector());
+    ret.add("y" , valid ? cand->rapidity() : -100.);
+    ret.add("charge", valid ? cand->charge() : 0.);
     return ret;
   }
 };
@@ -54,19 +55,23 @@ public:
   {
     const auto& cutsConfig = config.getParameter<edm::ParameterSet>("Cuts");
     for ( const auto& iName : cutsConfig.getParameterNames() ) {
-      m_cuts.emplace(iName, HybridCut{cutsConfig.getParameter<std::string>(iName)});
+      try {
+        m_cuts.emplace(iName, HybridCut{cutsConfig.getParameter<std::string>(iName)});
+      } catch (const edm::Exception& error) {
+        throw edm::Exception(edm::errors::Configuration) << "Problem parsing '" << cutsConfig.getParameter<std::string>(iName) << "' : " << error.message();
+      }
     }
   }
   virtual ~DictHybridCuts() {}
 
-  virtual Dict evaluate(const RecoCandidate& cand,
+  virtual Dict evaluate(edm::Ptr<RecoCandidate> cand,
       const edm::Event* /**/, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    bool valid{cand.originalObjectRef().isNonnull()};
+    const bool valid{cand.isNonnull()};
     Dict ret{};
     for ( const auto& nmAndCut : m_cuts ) {
-      ret.add(nmAndCut.first, valid && nmAndCut.second(cand));
+      ret.add(nmAndCut.first, valid && nmAndCut.second(*cand));
     }
     return ret;
   }
@@ -94,19 +99,23 @@ public:
   {
     const auto& funsConfig = config.getParameter<edm::ParameterSet>("Functions");
     for ( const auto& iName : funsConfig.getParameterNames() ) {
-      m_funs.emplace(iName, HybridFunction{funsConfig.getParameter<std::string>(iName)});
+      try {
+        m_funs.emplace(iName, HybridFunction{funsConfig.getParameter<std::string>(iName)});
+      } catch (const edm::Exception& error) {
+        throw edm::Exception(edm::errors::Configuration) << "Problem parsing '" << funsConfig.getParameter<std::string>(iName) << "' : " << error.message();
+      }
     }
   }
   virtual ~DictHybridFunctions() {}
 
-  virtual Dict evaluate(const RecoCandidate& cand,
+  virtual Dict evaluate(edm::Ptr<RecoCandidate> cand,
       const edm::Event* /**/, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
     Dict ret{};
-    bool valid{cand.originalObjectRef().isNonnull()};
+    bool valid{cand.isNonnull()};
     for ( const auto& nmAndFun : m_funs ) {
-      ret.add(nmAndFun.first, valid ? nmAndFun.second(cand) : 0.);
+      ret.add(nmAndFun.first, valid ? nmAndFun.second(*cand) : 0.);
     }
     return ret;
   }
@@ -129,11 +138,11 @@ class DictLeptonGenMatch : public DictTool<Lepton> {
 public:
   DictLeptonGenMatch(const edm::ParameterSet& config) : DictTool<Lepton>(config) {}
   virtual ~DictLeptonGenMatch() {}
-  virtual Dict evaluate(const Lepton& cand,
+  virtual Dict evaluate(edm::Ptr<Lepton> cand,
       const edm::Event* /**/, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    const auto gen = cand.genParticle();
+    const auto gen = cand.isNonnull() ? cand->genParticle() : nullptr;
     Dict ret{};
     ret.add("gen_p4"    , gen ? LorentzVector(gen->pt(), gen->eta(), gen->phi(), gen->energy()) : LorentzVector(0.,0.,0.,0.));
     ret.add("gen_y"     , gen ? gen->y() : 0.);
@@ -148,11 +157,11 @@ class DictJetGenMatch : public DictTool<pat::Jet> {
 public:
   DictJetGenMatch(const edm::ParameterSet& config) : DictTool<pat::Jet>(config) {}
   virtual ~DictJetGenMatch() {}
-  virtual Dict evaluate(const pat::Jet& cand,
+  virtual Dict evaluate(edm::Ptr<pat::Jet> cand,
       const edm::Event* /**/, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    const auto gen = cand.genJet();
+    const auto gen = cand.isNonnull() ? cand->genJet() : nullptr;
     Dict ret{};
     ret.add("gen_p4"    , gen ? LorentzVector(gen->pt(), gen->eta(), gen->phi(), gen->energy()) : LorentzVector(0.,0.,0.,0.));
     ret.add("gen_y"     , gen ? gen->y() : 0.);

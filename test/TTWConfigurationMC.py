@@ -5,10 +5,10 @@ from cp3_llbb.Framework import Framework
 
 from cp3_llbb.TTWAnalysis.Configuration import addTTWAnalyzer, addTTWCandidatesAnalyzer, customizeProducers
 
-globalTag_ = '76X_mcRun2_asymptotic_RunIIFall15DR76_v1'
+globalTag_ = "80X_mcRun2_asymptotic_2016_TrancheIV_v8"
 processName_ = 'PAT'
 
-framework = Framework.Framework(False, eras.Run2_25ns, globalTag=globalTag_, processName=processName_)
+framework = Framework.Framework(False, eras.Run2_2016, globalTag=globalTag_, processName=processName_)
 
 ## ANALYZERS
 addTTWAnalyzer          (framework) ## make candidates
@@ -28,7 +28,7 @@ framework.addAnalyzer('ttWTruth', cms.PSet(
 ## PRODUCERS
 customizeProducers(framework)
 
-# framework.redoJEC()
+framework.redoJEC()
 # framework.smearJets()
 # framework.doSystematics(['jec', 'jer'])
 framework.doSystematics([])

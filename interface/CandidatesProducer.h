@@ -50,12 +50,13 @@ namespace TTWAnalysis {
         m_selected.clear();
         for ( std::size_t i{0}; candidates->size() != i; ++i ) {
           if ( m_cut((*candidates)[i]) ) {
-            m_selected.push_back(edm::Ptr<ObjectType>{candidates.product(), i});
+            edm::Ptr<ObjectType> selCand{candidates, i};
+            m_selected.push_back(selCand);
             // calculate and add some values
             auto& cand = const_cast<ObjectType&>(candidates->at(i));
             LogDebug("ttW") << m_name << " evaluating dicts for selected candidate";
             for ( std::size_t iT{0}; this->m_dicts.size() != iT; ++iT ) {
-              auto dct = this->m_dicts[iT].first->evaluate(cand, &event, &eventSetup);
+              auto dct = this->m_dicts[iT].first->evaluate(selCand, &event, &eventSetup);
               for ( const auto& elm : dct ) {
                 cand.addUserFloat(elm.first, boost::any_cast<double>(elm.second));
                 LogDebug("ttW") << m_name << " added user float " << elm.first << " : " << boost::any_cast<double>(elm.second);

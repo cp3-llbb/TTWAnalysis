@@ -185,6 +185,7 @@ class TTWAnalyzer: public Framework::Analyzer {
         IdxListForWPsHolder<decltype(m_llbbWP)> m_idxllbbmDRWP_tag;
 
         const float m_electronPtCut, m_electronEtaCut;
+        std::vector<std::pair<std::string,edm::EDGetTokenT<edm::ValueMap<bool>>>> m_el_vidTokens;
 
         const float m_muonPtCut, m_muonEtaCut;
 

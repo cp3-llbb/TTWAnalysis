@@ -38,7 +38,7 @@ namespace TTWAnalysis {
         LogDebug("ttW") << "Container analyzer helper " << this->name() << ": initializing branches";
         std::transform(std::begin(this->m_dicts), std::end(this->m_dicts), std::back_inserter(this->m_branchesRefs),
             [this] ( const DictHolder& tool ) {
-              PatObject tmp{};
+              typename dict_argument_traits<PatObject>::argument_type tmp{};
               return BranchRefsHolder(m_tree, tool.first->evaluate(tmp));
             });
         LogDebug("ttW") << "Container analyzer helper " << this->name() << " initialized";
@@ -159,7 +159,7 @@ namespace TTWAnalysis {
       public:
         explicit _accessor( const TTWAnalyzer& ttW );
         std::size_t size() const { return m_cont.size(); }
-        const OBJ& operator[] ( std::size_t i ) const;
+        typename DictTool<OBJ>::argument_type operator[] ( std::size_t i ) const;
       private:
         const CONT& m_cont;
       };
@@ -168,7 +168,7 @@ namespace TTWAnalysis {
       public:
         explicit _accessor( const TTWAnalyzer& ttW ) : m_cont(ttW.getPtrList<OBJ>()) {}
         std::size_t size() const { return m_cont.size(); }
-        const OBJ& operator[] ( std::size_t i ) const { return *(m_cont[i].get()); }
+        typename DictTool<OBJ>::argument_type operator[] ( std::size_t i ) const { return m_cont[i]; }
       private:
         const edm::PtrVector<OBJ>& m_cont;
       };
@@ -177,7 +177,7 @@ namespace TTWAnalysis {
       public:
         explicit _accessor( const TTWAnalyzer& ttW ) : m_cont(ttW.getObjList<OBJ>()) {}
         std::size_t size() const { return m_cont.size(); }
-        const OBJ& operator[] ( std::size_t i ) const { return m_cont[i]; }
+        typename DictTool<OBJ>::argument_type operator[] ( std::size_t i ) const { return m_cont[i]; }
       private:
         const std::vector<OBJ>& m_cont;
       };

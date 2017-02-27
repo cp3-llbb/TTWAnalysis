@@ -41,7 +41,7 @@ public:
     // TODO electrons and muons unless vetoing "None"
   }
 
-  virtual Dict evaluate(const pat::Electron& cand,
+  virtual Dict evaluate(edm::Ptr<pat::Electron> cand,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
@@ -68,7 +68,7 @@ public:
     // TODO electrons and muons unless vetoing "None"
   }
 
-  virtual Dict evaluate(const pat::Muon& cand,
+  virtual Dict evaluate(edm::Ptr<pat::Muon> cand,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
@@ -81,34 +81,43 @@ private:
 
 // implementations
 
-TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(const pat::Electron& cand,
+TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(edm::Ptr<pat::Electron> cand,
     const edm::Event* event, const edm::EventSetup* /**/,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
   using heppy::IsolationComputer;
   m_isoComp.updateEvent(event);
 
-  double rho = event ? getRho(event) : 0.;
-  double eta = cand.originalObjectRef().isNonnull() ? cand.superCluster()->eta() : 0.;
+  const bool valid{cand.isNonnull() && cand->superCluster().isNonnull()};
+  if ( ! valid ) {
+    LogDebug("ttW-eleSync") << "Null electron: candidate is " << ( cand.isNonnull() ? "not " : "" ) << "null; supercluster ref is " << ( cand.isNonnull() ? ( cand->superCluster().isNonnull() ? "also not " : "" ) : "NA " ) << "null";
+  }
+  const double rho = event ? getRho(event) : 0.;
+  const double eta = valid ? cand->superCluster()->eta() : 0.;
 
-  double outerR{10.0/std::min(std::max(cand.pt(), 50.),200.)};
-  double innerRPh{(!cand.isEB()) ? 0.08 : 0.}; // inner rad for photons if eleE
-  double innerRCh{(!cand.isEB()) ? 0.015 : 0.}; // inner rad for charged particles if eleE
+  const double outerR{valid ? 10.0/std::min(std::max(cand->pt(), 50.),200.) : 0.};
 
-  double absIsoCharged{m_isoComp.chargedAbsIso(cand, outerR, innerRCh, 0., IsolationComputer::selfVetoNone)};
-  double absIsoPU{m_isoComp.puAbsIso(cand, outerR, innerRCh, 0.0, IsolationComputer::selfVetoNone)};
-  double isoPhotRaw{m_isoComp.photonAbsIsoRaw(cand, outerR, innerRPh, 0., IsolationComputer::selfVetoNone)};
-  double isoNHadRaw{m_isoComp.neutralHadAbsIsoRaw(cand, outerR, 0., 0., IsolationComputer::selfVetoNone)};
-  double isoNeutralRaw{isoPhotRaw+isoNHadRaw};
-  // puCorr "weights" case
-  double isoNeutralWeights{
-        m_isoComp.photonAbsIsoWeighted(cand, outerR, innerRPh, 0., IsolationComputer::selfVetoNone)
-      + m_isoComp.neutralHadAbsIsoWeighted(cand, outerR, 0., 0., IsolationComputer::selfVetoNone)
-      };
-  // puCorr "rhoArea" case
-  double isoNeutralRhoArea{std::max(0., isoNeutralRaw - rho * m_ea.getEffectiveArea(eta) * std::pow(outerR/0.3, 2))};
-  // puCorr "deltaBeta" case
-  double isoNeutralDeltaBeta{std::max(0., isoNeutralRaw - 0.5*absIsoPU)};
+  double absIsoCharged{-1.}, isoPhotRaw{-1.}, isoNHadRaw{-1.}, absIsoPU{-1.}, isoNeutralRaw{-1.}, isoNeutralWeights{-1.}, isoNeutralRhoArea{-1.}, isoNeutralDeltaBeta{-1.};
+  if ( valid ) {
+    const pat::Electron& candR = *cand;
+    const double innerRPh{(!candR.isEB()) ? 0.08 : 0.}; // inner rad for photons if eleE
+    const double innerRCh{(!candR.isEB()) ? 0.015 : 0.}; // inner rad for charged particles if eleE
+
+    absIsoCharged = m_isoComp.chargedAbsIso(candR, outerR, innerRCh, 0., IsolationComputer::selfVetoNone);
+    absIsoPU = m_isoComp.puAbsIso(candR, outerR, innerRCh, 0.0, IsolationComputer::selfVetoNone);
+    isoPhotRaw = m_isoComp.photonAbsIsoRaw(candR, outerR, innerRPh, 0., IsolationComputer::selfVetoNone);
+    isoNHadRaw = m_isoComp.neutralHadAbsIsoRaw(candR, outerR, 0., 0., IsolationComputer::selfVetoNone);
+    isoNeutralRaw = isoPhotRaw+isoNHadRaw;
+    // puCorr "weights" case
+    isoNeutralWeights =
+          m_isoComp.photonAbsIsoWeighted(candR, outerR, innerRPh, 0., IsolationComputer::selfVetoNone)
+        + m_isoComp.neutralHadAbsIsoWeighted(candR, outerR, 0., 0., IsolationComputer::selfVetoNone)
+        ;
+    // puCorr "rhoArea" case
+    isoNeutralRhoArea = std::max(0., isoNeutralRaw - rho * m_ea.getEffectiveArea(eta) * std::pow(outerR/0.3, 2));
+    // puCorr "deltaBeta" case
+    isoNeutralDeltaBeta = std::max(0., isoNeutralRaw - 0.5*absIsoPU);
+  }
   //
   TTWAnalysis::Dict ret{};
   ret.add("miniIso_R", outerR);
@@ -117,11 +126,12 @@ TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(const pat::El
   ret.add("miniIso_AbsNHad"   , isoNHadRaw);
   ret.add("miniIso_AbsPU"     , absIsoPU);
   //
-  auto addNeutralAbsRel = [&ret,absIsoCharged,&cand] (double neuIsoAbs, std::string postfix)
+  const float candpt = valid ? cand->pt() : -1.;
+  auto addNeutralAbsRel = [&ret,absIsoCharged,candpt] (double neuIsoAbs, std::string postfix)
   {
     ret.add("miniIso_AbsNeutral_"+postfix, neuIsoAbs);
     ret.add("miniIso_Abs_"+postfix, absIsoCharged+neuIsoAbs);
-    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
+    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/candpt);
   };
   addNeutralAbsRel(isoNeutralWeights  , "weights"  );
   addNeutralAbsRel(isoNeutralRaw      , "raw"      );
@@ -130,37 +140,43 @@ TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(const pat::El
   return ret;
 }
 
-TTWAnalysis::Dict TTWAnalysis::DictMuonMiniIsolation:: evaluate(const pat::Muon& cand,
+TTWAnalysis::Dict TTWAnalysis::DictMuonMiniIsolation:: evaluate(edm::Ptr<pat::Muon> cand,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
   using heppy::IsolationComputer;
   m_isoComp.updateEvent(event);
 
+  const bool valid{cand.isNonnull()};
   const double rho = event ? getRho(event) : 0.;
 
-  const double outerR{10.0/std::min(std::max(cand.pt(), 50.),200.)};
+  const double outerR{valid ? 10.0/std::min(std::max(cand->pt(), 50.),200.) : 0.};
 
-  const double absIsoCharged{m_isoComp.chargedAbsIso(cand, outerR, 0.0001, 0.)};
-  const double absIsoPU{m_isoComp.puAbsIso(cand, outerR, .01, .5)};
-  const double isoNeutralRaw{m_isoComp.neutralAbsIsoRaw(cand, outerR, 0.01, 0.5)};
-  // puCorr "weights" case
-  const double isoNeutralWeights{m_isoComp.neutralAbsIsoWeighted(cand, outerR, 0.01, 0.5)};
-  // puCorr "rhoArea" case
-  const double isoNeutralRhoArea{std::max(0., isoNeutralRaw - rho * m_ea.getEffectiveArea(cand.eta()) * std::pow(outerR/0.3, 2))};
-  // puCorr "deltaBeta" case
-  const double isoNeutralDeltaBeta{std::max(0., isoNeutralRaw - 0.5*absIsoPU)};
+  double absIsoCharged{-1.}, absIsoPU{-1.}, isoNeutralRaw{-1.}, isoNeutralWeights{-1.}, isoNeutralRhoArea{-1.}, isoNeutralDeltaBeta{-1.};
+  if ( valid ) {
+    const pat::Muon& candR = *cand;
+    absIsoCharged = m_isoComp.chargedAbsIso(candR, outerR, 0.0001, 0.);
+    absIsoPU = m_isoComp.puAbsIso(candR, outerR, .01, .5);
+    isoNeutralRaw = m_isoComp.neutralAbsIsoRaw(candR, outerR, 0.01, 0.5);
+    // puCorr "weights" case
+    isoNeutralWeights = m_isoComp.neutralAbsIsoWeighted(candR, outerR, 0.01, 0.5);
+    // puCorr "rhoArea" case
+    isoNeutralRhoArea = std::max(0., isoNeutralRaw - rho * m_ea.getEffectiveArea(candR.eta()) * std::pow(outerR/0.3, 2));
+    // puCorr "deltaBeta" case
+    isoNeutralDeltaBeta = std::max(0., isoNeutralRaw - 0.5*absIsoPU);
+  }
   //
   TTWAnalysis::Dict ret{};
   ret.add("miniIso_R", outerR);
   ret.add("miniIso_AbsCharged", absIsoCharged);
   ret.add("miniIso_AbsPU"     , absIsoPU);
   //
-  auto addNeutralAbsRel = [&ret,absIsoCharged,&cand] (double neuIsoAbs, std::string postfix)
+  const float candpt = valid ? cand->pt() : -1.;
+  auto addNeutralAbsRel = [&ret,absIsoCharged,candpt] (double neuIsoAbs, std::string postfix)
   {
     ret.add("miniIso_AbsNeutral_"+postfix, neuIsoAbs);
     ret.add("miniIso_Abs_"+postfix, absIsoCharged+neuIsoAbs);
-    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
+    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/candpt);
   };
   addNeutralAbsRel(isoNeutralWeights  , "weights"  );
   addNeutralAbsRel(isoNeutralRaw      , "raw"      );

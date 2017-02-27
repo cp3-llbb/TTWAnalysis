@@ -67,29 +67,29 @@ public:
     DictRhoHelper               ::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
   }
 
-  virtual Dict evaluate(const pat::Electron& el,
+  virtual Dict evaluate(edm::Ptr<pat::Electron> el,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    double rho = event ? getRho(event) : 0.;
-    bool elValid{el.originalObjectRef().isNonnull()};
-    double pt = el.pt();
-    double eta = elValid ? el.superCluster()->eta() : 0.;
+    const double rho = event ? getRho(event) : 0.;
+    const bool valid{el.isNonnull() && el->superCluster().isNonnull()};
+    const double pt = valid ? el->pt() : -1.;
+    const double eta = valid ? el->superCluster()->eta() : 0.;
 
     Dict ret{};
-    reco::GsfElectron::PflowIsolationVariables pfIso = el.pfIsolationVariables();
+    reco::GsfElectron::PflowIsolationVariables pfIso = valid ? el->pfIsolationVariables() : reco::GsfElectron::PflowIsolationVariables{};
     fillIsolations(pfIso.sumChargedHadronPt, pfIso.sumNeutralHadronEt,
                    pfIso.sumPhotonEt, pfIso.sumPUPt,
                    pt, eta, rho,
                    "R03", ret);
-    fillIsolations(el.chargedHadronIso(), el.neutralHadronIso(),
-                   el.photonIso(), el.puChargedHadronIso(),
+    fillIsolations(valid ? el->chargedHadronIso() : -1., valid ? el->neutralHadronIso() : -1.,
+                   valid ? el->photonIso() : -1., valid ? el->puChargedHadronIso() : -1.,
                    pt, eta, rho,
                    "R04", ret);
 
-    ret.add("ecalPFClusterIso", el.ecalPFClusterIso());
-    ret.add("hcalPFClusterIso", el.hcalPFClusterIso());
-    ret.add("trackIso", el.trackIso());
+    ret.add("ecalPFClusterIso", valid ? el->ecalPFClusterIso() : -1.);
+    ret.add("hcalPFClusterIso", valid ? el->hcalPFClusterIso() : -1.);
+    ret.add("trackIso", valid ? el->trackIso() : -1.);
 
     return ret;
   }
@@ -109,21 +109,22 @@ public:
     DictRhoHelper           ::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
   }
 
-  virtual Dict evaluate(const pat::Muon& mu,
+  virtual Dict evaluate(edm::Ptr<pat::Muon> mu,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    double rho = event ? getRho(event) : 0.;
-    double pt = mu.pt();
-    double eta = mu.eta();
+    const double rho = event ? getRho(event) : 0.;
+    const bool valid{mu.isNonnull()};
+    const double pt  = valid ? mu->pt() : -1.;
+    const double eta = valid ? mu->eta() : -10.;
 
     Dict ret{};
-    reco::MuonPFIsolation pfIso = mu.pfIsolationR03();
+    reco::MuonPFIsolation pfIso = valid ? mu->pfIsolationR03() : reco::MuonPFIsolation{};
     fillIsolations(pfIso.sumChargedHadronPt, pfIso.sumNeutralHadronEt,
                    pfIso.sumPhotonEt, pfIso.sumPUPt,
                    pt, eta, rho,
                    "R03", ret);
-    pfIso = mu.pfIsolationR04();
+    if ( valid ) { pfIso = mu->pfIsolationR04(); }
     fillIsolations(pfIso.sumChargedHadronPt, pfIso.sumNeutralHadronEt,
                    pfIso.sumPhotonEt, pfIso.sumPUPt,
                    pt, eta, rho,

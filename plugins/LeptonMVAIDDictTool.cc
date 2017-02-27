@@ -59,7 +59,7 @@ public:
     m_jetsToken = collector.consumes<std::vector<pat::Jet>>(config.getParameter<edm::InputTag>("Jets"));
   }
 
-  virtual Dict evaluate(const pat::Electron& cand,
+  virtual Dict evaluate(edm::Ptr<pat::Electron> cand,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
@@ -106,7 +106,7 @@ public:
     m_jetsToken = collector.consumes<std::vector<pat::Jet>>(config.getParameter<edm::InputTag>("Jets"));
   }
 
-  virtual Dict evaluate(const pat::Muon& cand,
+  virtual Dict evaluate(edm::Ptr<pat::Muon> cand,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
@@ -137,14 +137,14 @@ namespace {
   _LessOf<_Arg,_UnaryFunction> LessOf( _UnaryFunction __fun )
   { return _LessOf<_Arg,_UnaryFunction>(std::forward<_UnaryFunction>(__fun)); }
 
-  const pat::Jet* findMatchingJet( const reco::RecoCandidate& lepton, const std::vector<pat::Jet>& jets, double maxDR )
+  const pat::Jet* findMatchingJet( edm::Ptr<reco::RecoCandidate> lepton, const std::vector<pat::Jet>& jets, double maxDR )
   {
     using namespace ROOT::Math;
     const auto it = std::min_element(std::begin(jets), std::end(jets),
-          LessOf<const pat::Jet&>( [&lepton] ( const pat::Jet& j ) {
-            return VectorUtil::DeltaR(j.p4(), lepton.p4());
+          LessOf<const pat::Jet&>( [lepton] ( const pat::Jet& j ) {
+            return VectorUtil::DeltaR(j.p4(), lepton->p4());
           } ));
-    if ( ( std::end(jets) != it ) && ( VectorUtil::DeltaR(lepton.p4(), it->p4()) < maxDR ) ) {
+    if ( ( std::end(jets) != it ) && ( VectorUtil::DeltaR(lepton->p4(), it->p4()) < maxDR ) ) {
       return &*it;
     }
     return nullptr;
@@ -182,7 +182,7 @@ namespace {
     return ( (m-lepton).Rho() < 1.e-4 ) ? 0. : lepton.Vect().Cross((m-lepton).Vect().Unit()).R();
   }
 
-  int numberOfChargedDaughtersMVASel(const pat::Jet* jet, const reco::RecoCandidate& cand, const reco::Vertex* pv)
+  int numberOfChargedDaughtersMVASel(const pat::Jet* jet, const reco::RecoCandidate* cand, const reco::Vertex* pv)
   {
     using namespace ROOT::Math;
     if ( ( ! jet ) || ( ! pv ) ) { return 0; }
@@ -212,46 +212,46 @@ namespace {
   }
 }
 
-TTWAnalysis::Dict TTWAnalysis::DictTTHElectronMVA::evaluate(const pat::Electron& cand,
+TTWAnalysis::Dict TTWAnalysis::DictTTHElectronMVA::evaluate(edm::Ptr<pat::Electron> cand,
     const edm::Event* event, const edm::EventSetup* /**/,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
-  bool elValid{cand.originalObjectRef().isNonnull()};
-  const double eta = elValid ? cand.superCluster()->eta() : 0.;
+  const bool valid{cand.isNonnull() && cand->superCluster().isNonnull()};
+  const double eta = valid ? cand->superCluster()->eta() : 0.;
   const reco::Vertex* pv = event ? getPV(event) : nullptr;
 
   edm::Handle<std::vector<pat::Jet>> jets;
   const pat::Jet* jet{nullptr};
-  if ( event ) {
+  if ( event && valid ) {
     event->getByToken(m_jetsToken, jets);
     jet = findMatchingJet( cand, *jets, m_maxDR );
   }
-  int jetNDauChargedMVASel = ( jet && pv ) ? numberOfChargedDaughtersMVASel(jet, cand, pv) : 0;
+  int jetNDauChargedMVASel = ( valid && jet && pv ) ? numberOfChargedDaughtersMVASel(jet, cand.get(), pv) : 0;
 
   if ( false ) {
-    std::cout << "\n\nElectron prompt-lepton MVA for electron with momentum "; printMomentum(cand.p4(), std::cout); std::cout << std::endl;
+    std::cout << "\n\nElectron prompt-lepton MVA for electron with momentum "; printMomentum(valid ? cand->p4() : reco::Candidate::LorentzVector{}, std::cout); std::cout << std::endl;
     std::cout << "Best matching jet: "; if ( jet ) { printMomentum(jet->p4(), std::cout); } else { std::cout << "none"; }; std::cout << std::endl;
-    if ( jet ) {
-      reco::Candidate::LorentzVector m{jetLepAwareJEC(jet, cand.p4(), true)};
+    if ( valid && jet ) {
+      reco::Candidate::LorentzVector m{jetLepAwareJEC(jet, cand->p4(), true)};
       std::cout << "After lepton-aware JEC: "; printMomentum(m, std::cout); std::cout << std::endl;
     }
   }
 
-  getVar("LepGood_pt"                   ) = cand.pt();
+  getVar("LepGood_pt"                   ) = valid ? cand->pt() : -1.;
   getVar("LepGood_eta"                  ) = eta;
   getVar("LepGood_jetNDauChargedMVASel" ) = jetNDauChargedMVASel;
-  getVar("LepGood_miniRelIsoCharged"    ) = elValid ? cand.userFloat("miniIso_AbsCharged")/cand.pt() : -1.;
-  getVar("LepGood_miniRelIsoNeutral"    ) = elValid ? cand.userFloat("miniIso_AbsNeutral_rhoArea")/cand.pt() : -1.;
-  getVar("LepGood_jetPtRelv2"           ) = ptRelv2(jet, cand.p4());
-  getVar("min(LepGood_jetPtRatiov2,1.5)") = std::min(cand.pt()/jetLepAwareJEC(jet, cand.p4()).Pt(), 1.5);
+  getVar("LepGood_miniRelIsoCharged"    ) = valid ? cand->userFloat("miniIso_AbsCharged")/cand->pt() : -1.;
+  getVar("LepGood_miniRelIsoNeutral"    ) = valid ? cand->userFloat("miniIso_AbsNeutral_rhoArea")/cand->pt() : -1.;
+  getVar("LepGood_jetPtRelv2"           ) = valid ? ptRelv2(jet, cand->p4()) : -1.;
+  getVar("min(LepGood_jetPtRatiov2,1.5)") = valid ? std::min(cand->pt()/jetLepAwareJEC(jet, cand->p4()).Pt(), 1.5) : -1.;
   getVar("max(LepGood_jetBTagCSV,0)"    ) = std::max(jet ? jet->bDiscriminator("pfCombinedInclusiveSecondaryVertexV2BJetTags") : -99., 0.);
-  getVar("LepGood_sip3d"                ) = std::abs(cand.dB(pat::Electron::PV3D)/cand.edB(pat::Electron::PV3D));
-  getVar("log(abs(LepGood_dxy))"        ) = pv && elValid ? std::log(std::abs(cand.gsfTrack()->dxy(pv->position()))) : 0.; // TODO check definition
-  getVar("log(abs(LepGood_dz))"         ) = pv && elValid ? std::log(std::abs(cand.gsfTrack()->dz (pv->position()))) : 0.;
-  getVar("LepGood_mvaIdSpring15"        ) = elValid ? cand.userFloat("ElectronMVAEstimatorRun2Spring15NonTrig25nsV1Values") : -1.;
+  getVar("LepGood_sip3d"                ) = valid ? std::abs(cand->userFloat("dca")) : -1;
+  getVar("log(abs(LepGood_dxy))"        ) = valid ? std::log(std::abs(cand->userFloat("dxy"))) : 0.;
+  getVar("log(abs(LepGood_dz))"         ) = valid ? std::log(std::abs(cand->userFloat("dz" ))) : 0.;
+  getVar("LepGood_mvaIdSpring15"        ) = valid ? cand->userFloat("ElectronMVAEstimatorRun2Spring15NonTrig25nsV1Values") : -1.;
 
   TTWAnalysis::Dict ret{};
-  ret.add("LeptonMVA"     , elValid ? m_tmvaReader.EvaluateMVA("ttH-el-BDTG") : -1.);
+  ret.add("LeptonMVA"     , valid ? m_tmvaReader.EvaluateMVA("ttH-el-BDTG") : -1.);
   // some more variables that are only calculated here
   ret.add("jetPtRelv2"    , getVar("LepGood_jetPtRelv2"));
   ret.add("jetPtRatio"    , getVar("min(LepGood_jetPtRatiov2,1.5)"));
@@ -265,45 +265,45 @@ TTWAnalysis::Dict TTWAnalysis::DictTTHElectronMVA::evaluate(const pat::Electron&
   return ret;
 }
 
-TTWAnalysis::Dict TTWAnalysis::DictTTHMuonMVA::evaluate(const pat::Muon& cand,
+TTWAnalysis::Dict TTWAnalysis::DictTTHMuonMVA::evaluate(edm::Ptr<pat::Muon> cand,
     const edm::Event* event, const edm::EventSetup* /**/,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
-  bool muValid{cand.originalObjectRef().isNonnull()};
+  const bool valid{cand.isNonnull()};
   const reco::Vertex* pv = event ? getPV(event) : nullptr;
 
   edm::Handle<std::vector<pat::Jet>> jets;
   const pat::Jet* jet{nullptr};
-  if ( event ) {
+  if ( event && valid ) {
     event->getByToken(m_jetsToken, jets);
     jet = findMatchingJet( cand, *jets, m_maxDR );
   }
-  int jetNDauChargedMVASel = ( jet && pv ) ? numberOfChargedDaughtersMVASel(jet, cand, pv) : 0;
+  int jetNDauChargedMVASel = ( valid && jet && pv ) ? numberOfChargedDaughtersMVASel(jet, cand.get(), pv) : 0;
 
   if ( false ) {
-    std::cout << "\n\nMuon prompt-lepton MVA for muon with momentum "; printMomentum(cand.p4(), std::cout); std::cout << std::endl;
+    std::cout << "\n\nMuon prompt-lepton MVA for muon with momentum "; printMomentum(valid ? cand->p4() : reco::Candidate::LorentzVector{}, std::cout); std::cout << std::endl;
     std::cout << "Best matching jet: "; if ( jet ) { printMomentum(jet->p4(), std::cout); } else { std::cout << "none"; }; std::cout << std::endl;
-    if ( jet ) {
-      reco::Candidate::LorentzVector m{jetLepAwareJEC(jet, cand.p4(), true)};
+    if ( valid && jet ) {
+      reco::Candidate::LorentzVector m{jetLepAwareJEC(jet, cand->p4(), true)};
       std::cout << "After lepton-aware JEC: "; printMomentum(m, std::cout); std::cout << std::endl;
     }
   }
 
-  getVar("LepGood_pt"                   ) = cand.pt();
-  getVar("LepGood_eta"                  ) = cand.eta();
+  getVar("LepGood_pt"                   ) = valid ? cand->pt() : -1.;
+  getVar("LepGood_eta"                  ) = valid ? cand->eta() : -100.;
   getVar("LepGood_jetNDauChargedMVASel" ) = jetNDauChargedMVASel;
-  getVar("LepGood_miniRelIsoCharged"    ) = muValid ? cand.userFloat("miniIso_AbsCharged")/cand.pt() : -1.;
-  getVar("LepGood_miniRelIsoNeutral"    ) = muValid ? cand.userFloat("miniIso_AbsNeutral_rhoArea")/cand.pt() : -1.;
-  getVar("LepGood_jetPtRelv2"           ) = ptRelv2(jet, cand.p4());
-  getVar("min(LepGood_jetPtRatiov2,1.5)") = std::min(cand.pt()/jetLepAwareJEC(jet, cand.p4()).Pt(), 1.5);
+  getVar("LepGood_miniRelIsoCharged"    ) = valid ? cand->userFloat("miniIso_AbsCharged")/cand->pt() : -1.;
+  getVar("LepGood_miniRelIsoNeutral"    ) = valid ? cand->userFloat("miniIso_AbsNeutral_rhoArea")/cand->pt() : -1.;
+  getVar("LepGood_jetPtRelv2"           ) = valid ? ptRelv2(jet, cand->p4()): -1.;
+  getVar("min(LepGood_jetPtRatiov2,1.5)") = valid ? std::min(cand->pt()/jetLepAwareJEC(jet, cand->p4()).Pt(), 1.5) : -1.;
   getVar("max(LepGood_jetBTagCSV,0)"    ) = std::max(jet ? jet->bDiscriminator("pfCombinedInclusiveSecondaryVertexV2BJetTags") : -99., 0.);
-  getVar("LepGood_sip3d"                ) = std::abs(cand.dB(pat::Muon::PV3D)/cand.edB(pat::Muon::PV3D));
-  getVar("log(abs(LepGood_dxy))"        ) = pv && muValid && cand.muonBestTrack().isNonnull() ? std::log(std::abs(cand.muonBestTrack()->dxy(pv->position()))) : 0.; // TODO check definition
-  getVar("log(abs(LepGood_dz))"         ) = pv && muValid && cand.muonBestTrack().isNonnull() ? std::log(std::abs(cand.muonBestTrack()->dz (pv->position()))) : 0.;
-  getVar("LepGood_segmentCompatibility" ) = cand.segmentCompatibility();
+  getVar("LepGood_sip3d"                ) = valid ? std::abs(cand->dB(pat::Muon::PV3D)/cand->edB(pat::Muon::PV3D)) : -1.;
+  getVar("log(abs(LepGood_dxy))"        ) = pv && valid && cand->muonBestTrack().isNonnull() ? std::log(std::abs(cand->muonBestTrack()->dxy(pv->position()))) : 0.; // TODO check definition
+  getVar("log(abs(LepGood_dz))"         ) = pv && valid && cand->muonBestTrack().isNonnull() ? std::log(std::abs(cand->muonBestTrack()->dz (pv->position()))) : 0.;
+  getVar("LepGood_segmentCompatibility" ) = valid ? cand->segmentCompatibility() : false;
 
   TTWAnalysis::Dict ret{};
-  ret.add("LeptonMVA"     , muValid ? m_tmvaReader.EvaluateMVA("ttH-mu-BDTG") : -1.);
+  ret.add("LeptonMVA"     , valid ? m_tmvaReader.EvaluateMVA("ttH-mu-BDTG") : -1.);
   // some more variables that are only calculated here
   ret.add("jetPtRelv2"    , getVar("LepGood_jetPtRelv2"));
   ret.add("jetPtRatio"    , getVar("min(LepGood_jetPtRatiov2,1.5)"));

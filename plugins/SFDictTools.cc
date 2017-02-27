@@ -32,16 +32,15 @@ public:
   }
   virtual ~DictScaleFactors() {}
 
-  virtual Dict evaluate(const PatObject& obj,
+  virtual Dict evaluate(edm::Ptr<PatObject> obj,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
+    const bool valid{obj.isNonnull()};
     Dict ret{};
-    std::vector<float> vars;
-    vars = { float(std::abs(obj.eta())), float(obj.pt()) };
+    const Parameters vars{ {BinningVariable::Eta, valid ? obj->eta() : -100.}, {BinningVariable::Pt, valid ? obj->pt() : -1.} };
     for ( const auto& sf : m_sf ) {
-      std::vector<float> sfWErrs = ( event && ( ! event->isRealData() ) ) ?
-                                        sf.second.get(vars)
+      const std::vector<float> sfWErrs = ( event && ( ! event->isRealData() ) ) ? sf.second.get(vars)
                                       : std::vector<float>({ 1., 0., 0. });
       ret.add("sf_"+sf.first       , sfWErrs[0]);
       ret.add("sf_"+sf.first+"_elo", sfWErrs[1]);
@@ -103,22 +102,20 @@ public:
   }
   virtual ~DictJetScaleFactors() {}
 
-  virtual Dict evaluate(const pat::Jet& jet,
+  virtual Dict evaluate(edm::Ptr<pat::Jet> jet,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
+    const bool valid{jet.isNonnull()};
     Dict ret{};
     for ( const auto algoWithWPs : m_algos ) {
-      Algorithm algo = BTaggingScaleFactors::string_to_algorithm(algoWithWPs.first);
-      std::string algoShort{BTaggingScaleFactors::algorithm_to_string(algo)};
+      const Algorithm algo = BTaggingScaleFactors::string_to_algorithm(algoWithWPs.first);
+      const std::string algoShort{BTaggingScaleFactors::algorithm_to_string(algo)};
       for ( const auto& wp : algoWithWPs.second ) {
-        sf_key_type sf_key = std::make_tuple(algo, BTaggingScaleFactors::get_flavor(jet.hadronFlavour()), wp);
-        std::string sf_name{algoShort+"_"+wp};
-        std::vector<float> vars;
-        vars = { float(std::abs(jet.eta())), float(jet.pt()), float(jet.bDiscriminator(algoWithWPs.first)) };
-
-        std::vector<float> sfWErrs = ( event && ( ! event->isRealData() ) ) ?
-                                          m_sf.find(sf_key)->second.get(vars)
+        const sf_key_type sf_key = std::make_tuple(algo, valid ? BTaggingScaleFactors::get_flavor(jet->hadronFlavour()) : Flavor::LIGHT, wp);
+        const std::string sf_name{algoShort+"_"+wp};
+        const Parameters vars{ {BinningVariable::Eta, valid ? jet->eta() : -100.}, {BinningVariable::Pt, valid ? jet->pt() : -1.}, {BinningVariable::BTagDiscri, valid ? jet->bDiscriminator(algoWithWPs.first) : -1.} };
+        const std::vector<float> sfWErrs = ( event && ( ! event->isRealData() ) ) ? m_sf.find(sf_key)->second.get(vars)
                                         : std::vector<float>({ 1., 0., 0. });
         ret.add("sf_"+sf_name       , sfWErrs[0]);
         ret.add("sf_"+sf_name+"_elo", sfWErrs[1]);

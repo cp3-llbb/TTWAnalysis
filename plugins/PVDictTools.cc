@@ -55,20 +55,21 @@ public:
     DictPVHelper                ::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
   }
 
-  virtual Dict evaluate(const pat::Electron& el,
+  virtual Dict evaluate(edm::Ptr<pat::Electron> el,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    bool elValid{el.originalObjectRef().isNonnull()};
+    const bool elValid{el.isNonnull()};
+    const bool elValidIP{elValid && el->gsfTrack().isNonnull()};
     const reco::Vertex* pv = event ? getPV(event) : nullptr;
 
     Dict ret;
     // Same values used for cut-based electron ID. See:
     //     https://github.com/cms-sw/cmssw/blob/CMSSW_7_4_15/RecoEgamma/ElectronIdentification/plugins/cuts/GsfEleDzCut.cc#L64
     //     https://github.com/cms-sw/cmssw/blob/CMSSW_7_4_15/RecoEgamma/ElectronIdentification/plugins/cuts/GsfEleDxyCut.cc#L64
-    ret.add("dxy", pv && elValid ? el.gsfTrack()->dxy(pv->position()) : 0. );
-    ret.add("dz" , pv && elValid ? el.gsfTrack()->dz (pv->position()) : 0. );
-    ret.add("dca", el.dB(pat::Electron::PV3D)/el.edB(pat::Electron::PV3D));
+    ret.add("dxy", pv && elValidIP ? el->gsfTrack()->dxy(pv->position()) : 0. );
+    ret.add("dz" , pv && elValidIP ? el->gsfTrack()->dz (pv->position()) : 0. );
+    ret.add("dca", elValid ? el->dB(pat::Electron::PV3D)/el->edB(pat::Electron::PV3D) : -1.);
 
     return ret;
   }
@@ -89,19 +90,20 @@ public:
     DictPVHelper            ::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
   }
 
-  virtual Dict evaluate(const pat::Muon& mu,
+  virtual Dict evaluate(edm::Ptr<pat::Muon> mu,
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override
   {
-    bool muValid{mu.originalObjectRef().isNonnull()};
+    const bool muValid{mu.isNonnull()};
+    const bool muValidIP{muValid && mu->muonBestTrack().isNonnull()};
     const reco::Vertex* pv = event ? getPV(event) : nullptr;
 
     Dict ret;
     // Same values used for cut-based muon ID. See:
     //     https://github.com/cms-sw/cmssw/blob/CMSSW_7_4_15/DataFormats/MuonReco/src/MuonSelectors.cc#L756
-    ret.add("dxy", pv && muValid && mu.muonBestTrack().isNonnull() ? mu.muonBestTrack()->dxy(pv->position()) : 0. );
-    ret.add("dz" , pv && muValid && mu.muonBestTrack().isNonnull() ? mu.muonBestTrack()->dz (pv->position()) : 0. );
-    ret.add("dca", mu.dB(pat::Muon::PV3D)/mu.edB(pat::Muon::PV3D));
+    ret.add("dxy", pv && muValidIP ? mu->muonBestTrack()->dxy(pv->position()) : 0. );
+    ret.add("dz" , pv && muValidIP ? mu->muonBestTrack()->dz (pv->position()) : 0. );
+    ret.add("dca", muValid ? mu->dB(pat::Muon::PV3D)/mu->edB(pat::Muon::PV3D) : -1.);
 
     return ret;
   }
