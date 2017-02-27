@@ -117,7 +117,16 @@ public:
   float photonAbsIsoWeighted(const reco::Candidate &cand, float dR, float innerR=0, float threshold=0, SelfVetoPolicy selfVeto=selfVetoAll) const
   { return isoSumNeutralsWeighted(cand, dR, innerR, threshold, selfVeto, 22); }
 
+  void updateEvent( const edm::Event* event );
+
+  void doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector)
+  {
+    m_packedCandidates_token = collector.consumes<std::vector<pat::PackedCandidate>>(config.getParameter<edm::InputTag>("packedCandidates"));
+  }
+
 protected:
+  edm::EventID m_lastEvent;
+  edm::EDGetTokenT<std::vector<pat::PackedCandidate>> m_packedCandidates_token;
   const std::vector<pat::PackedCandidate> * allcands_;
   float weightCone_;
   // collections of objects, sorted in eta

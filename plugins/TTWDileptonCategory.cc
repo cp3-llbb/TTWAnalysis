@@ -93,6 +93,9 @@ bool GDileptonCategory::diLeptonIsInCategory( const TTWAnalyzer* ttW, uint16_t d
 bool GDileptonCategory::event_in_category_post_analyzers(const ProducersManager& producers, const AnalyzersManager& analyzers) const
 {
   const TTWAnalyzer& ttW = analyzers.get<TTWAnalyzer>("ttW");
+  if ( m_llWPs.empty() ) {
+    return true;
+  }
   for ( const auto& sel : m_llWPs ) {
     const auto& catDiLeptons = ttW.selectedDiLeptons(sel);
     if ( ( ! catDiLeptons.empty() )

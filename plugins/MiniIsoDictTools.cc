@@ -37,7 +37,7 @@ public:
   virtual void doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector) override
   {
     DictRhoHelper::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
-    m_packedCandidates_token = collector.consumes<std::vector<pat::PackedCandidate>>(config.getParameter<edm::InputTag>("packedCandidates"));
+    m_isoComp.doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
     // TODO electrons and muons unless vetoing "None"
   }
 
@@ -46,9 +46,7 @@ public:
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
 private:
-  mutable edm::EventID m_lastEvent;
   mutable heppy::IsolationComputer m_isoComp;
-  edm::EDGetTokenT<std::vector<pat::PackedCandidate>> m_packedCandidates_token;
   EffectiveAreas m_ea;
 };
 
@@ -66,7 +64,7 @@ public:
   virtual void doConsumes(const edm::ParameterSet& config, edm::ConsumesCollector&& collector) override
   {
     DictRhoHelper::doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
-    m_packedCandidates_token = collector.consumes<std::vector<pat::PackedCandidate>>(config.getParameter<edm::InputTag>("packedCandidates"));
+    m_isoComp.doConsumes(config, std::forward<edm::ConsumesCollector>(collector));
     // TODO electrons and muons unless vetoing "None"
   }
 
@@ -75,9 +73,7 @@ public:
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const override;
 
 private:
-  mutable edm::EventID m_lastEvent;
   mutable heppy::IsolationComputer m_isoComp;
-  edm::EDGetTokenT<std::vector<pat::PackedCandidate>> m_packedCandidates_token;
   EffectiveAreas m_ea;
 };
 
@@ -89,15 +85,8 @@ TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(const pat::El
     const edm::Event* event, const edm::EventSetup* /**/,
     const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
-  if ( event && ( m_lastEvent != event->id() ) ) {
-    edm::Handle<std::vector<pat::PackedCandidate>> packedCandidatesHandle;
-    event->getByToken(m_packedCandidates_token, packedCandidatesHandle);
-    m_isoComp.setPackedCandidates(*(packedCandidatesHandle.product()));
-    // TODO if vetoing "any": add all leptons from containers
-    // TODO if vetoing "inclusive": add specifically pre-selected leptons (and for these add the miniIso)
-    m_lastEvent = event->id();
-  }
   using heppy::IsolationComputer;
+  m_isoComp.updateEvent(event);
 
   double rho = event ? getRho(event) : 0.;
   double eta = cand.originalObjectRef().isNonnull() ? cand.superCluster()->eta() : 0.;
@@ -122,17 +111,17 @@ TTWAnalysis::Dict TTWAnalysis::DictElectronMiniIsolation::evaluate(const pat::El
   double isoNeutralDeltaBeta{std::max(0., isoNeutralRaw - 0.5*absIsoPU)};
   //
   TTWAnalysis::Dict ret{};
-  ret.add("miniIsoR", outerR);
-  ret.add("miniAbsIsoCharged", absIsoCharged);
-  ret.add("miniAbsIsoPho"    , isoPhotRaw);
-  ret.add("miniAbsIsoNHad"   , isoNHadRaw);
-  ret.add("miniAbsIsoPU"     , absIsoPU);
+  ret.add("miniIso_R", outerR);
+  ret.add("miniIso_AbsCharged", absIsoCharged);
+  ret.add("miniIso_AbsPho"    , isoPhotRaw);
+  ret.add("miniIso_AbsNHad"   , isoNHadRaw);
+  ret.add("miniIso_AbsPU"     , absIsoPU);
   //
   auto addNeutralAbsRel = [&ret,absIsoCharged,&cand] (double neuIsoAbs, std::string postfix)
   {
-    ret.add("miniAbsIsoNeutral_"+postfix, neuIsoAbs);
-    ret.add("miniAbsIso_"+postfix, absIsoCharged+neuIsoAbs);
-    ret.add("miniRelIso_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
+    ret.add("miniIso_AbsNeutral_"+postfix, neuIsoAbs);
+    ret.add("miniIso_Abs_"+postfix, absIsoCharged+neuIsoAbs);
+    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
   };
   addNeutralAbsRel(isoNeutralWeights  , "weights"  );
   addNeutralAbsRel(isoNeutralRaw      , "raw"      );
@@ -145,15 +134,8 @@ TTWAnalysis::Dict TTWAnalysis::DictMuonMiniIsolation:: evaluate(const pat::Muon&
       const edm::Event* event, const edm::EventSetup* /**/,
       const ProducersManager* /**/, const AnalyzersManager* /**/, const CategoryManager* /**/) const
 {
-  if ( event && ( m_lastEvent != event->id() ) ) {
-    edm::Handle<std::vector<pat::PackedCandidate>> packedCandidatesHandle;
-    event->getByToken(m_packedCandidates_token, packedCandidatesHandle);
-    m_isoComp.setPackedCandidates(*(packedCandidatesHandle.product()));
-    // TODO if vetoing "any": add all leptons from containers
-    // TODO if vetoing "inclusive": add specifically pre-selected leptons (and for these add the miniIso)
-    m_lastEvent = event->id();
-  }
   using heppy::IsolationComputer;
+  m_isoComp.updateEvent(event);
 
   const double rho = event ? getRho(event) : 0.;
 
@@ -170,15 +152,15 @@ TTWAnalysis::Dict TTWAnalysis::DictMuonMiniIsolation:: evaluate(const pat::Muon&
   const double isoNeutralDeltaBeta{std::max(0., isoNeutralRaw - 0.5*absIsoPU)};
   //
   TTWAnalysis::Dict ret{};
-  ret.add("miniIsoR", outerR);
-  ret.add("miniAbsIsoCharged", absIsoCharged);
-  ret.add("miniAbsIsoPU"     , absIsoPU);
+  ret.add("miniIso_R", outerR);
+  ret.add("miniIso_AbsCharged", absIsoCharged);
+  ret.add("miniIso_AbsPU"     , absIsoPU);
   //
   auto addNeutralAbsRel = [&ret,absIsoCharged,&cand] (double neuIsoAbs, std::string postfix)
   {
-    ret.add("miniAbsIsoNeutral_"+postfix, neuIsoAbs);
-    ret.add("miniAbsIso_"+postfix, absIsoCharged+neuIsoAbs);
-    ret.add("miniRelIso_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
+    ret.add("miniIso_AbsNeutral_"+postfix, neuIsoAbs);
+    ret.add("miniIso_Abs_"+postfix, absIsoCharged+neuIsoAbs);
+    ret.add("miniIso_Rel_"+postfix, (absIsoCharged+neuIsoAbs)/cand.pt());
   };
   addNeutralAbsRel(isoNeutralWeights  , "weights"  );
   addNeutralAbsRel(isoNeutralRaw      , "raw"      );

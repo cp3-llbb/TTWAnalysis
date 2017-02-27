@@ -35,11 +35,13 @@ namespace TTWAnalysis {
           LogDebug("ttW") << m_dicts.size()-1 << " : " << dictToolName;
         }
         // initialize branch-ref-group for each dict based on that
+        LogDebug("ttW") << "Container analyzer helper " << this->name() << ": initializing branches";
         std::transform(std::begin(this->m_dicts), std::end(this->m_dicts), std::back_inserter(this->m_branchesRefs),
             [this] ( const DictHolder& tool ) {
               PatObject tmp{};
               return BranchRefsHolder(m_tree, tool.first->evaluate(tmp));
             });
+        LogDebug("ttW") << "Container analyzer helper " << this->name() << " initialized";
       }
 
       virtual ~ContainerAnalyzerHelper() {}
@@ -122,6 +124,8 @@ namespace TTWAnalysis {
                 addBranch<float>(tree, entry.first);
               } else if ( typeid(double)        == etyp ) {
                 addBranch<double>(tree, entry.first);
+              } else if ( typeid(math::XYZPointD) == etyp ) {
+                addBranch<math::XYZPointD>(tree, entry.first);
               } else if ( typeid(math::PtEtaPhiELorentzVectorF) == etyp ) {
                 addBranch<math::PtEtaPhiELorentzVectorF>(tree, entry.first);
               } else {
@@ -182,6 +186,9 @@ namespace TTWAnalysis {
 
 #include "FWCore/PluginManager/interface/PluginFactory.h"
 
+namespace reco {
+  class Vertex;
+};
 namespace pat {
   class Electron;
   class Muon;
@@ -197,6 +204,8 @@ namespace TTWAnalysis {
 };
 
 namespace TTWAnalysis {
+  using VerticesAnalyzerHelper  = ContainerAnalyzerHelper<reco::Vertex ,std::vector<reco::Vertex    >>;
+
   using ElectronsAnalyzerHelper = ContainerAnalyzerHelper<pat::Electron,edm::PtrVector<pat::Electron>>;
   using MuonsAnalyzerHelper     = ContainerAnalyzerHelper<pat::Muon    ,edm::PtrVector<pat::Muon    >>;
   using JetsAnalyzerHelper      = ContainerAnalyzerHelper<pat::Jet     ,edm::PtrVector<pat::Jet     >>;
@@ -206,10 +215,9 @@ namespace TTWAnalysis {
   using DiJetsAnalyzerHelper            = ContainerAnalyzerHelper<TTWAnalysis::DiJet           ,std::vector<TTWAnalysis::DiJet           >>;
   using DiLeptonDiJetsAnalyzerHelper    = ContainerAnalyzerHelper<TTWAnalysis::DiLeptonDiJet   ,std::vector<TTWAnalysis::DiLeptonDiJet   >>;
   using DiLeptonDiJetMetsAnalyzerHelper = ContainerAnalyzerHelper<TTWAnalysis::DiLeptonDiJetMet,std::vector<TTWAnalysis::DiLeptonDiJetMet>>;
-
-
-
 };
+
+DEFINE_EDM_PLUGIN(TTWAnalyzerHelperFactory, TTWAnalysis::VerticesAnalyzerHelper , "ttw_verticesanalyzerhelper");
 
 DEFINE_EDM_PLUGIN(TTWAnalyzerHelperFactory, TTWAnalysis::ElectronsAnalyzerHelper, "ttw_electronsanalyzerhelper");
 DEFINE_EDM_PLUGIN(TTWAnalyzerHelperFactory, TTWAnalysis::MuonsAnalyzerHelper    , "ttw_muonsanalyzerhelper");

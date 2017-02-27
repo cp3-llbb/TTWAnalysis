@@ -184,3 +184,15 @@ float heppy::IsolationComputer::isoSumNeutralsWeighted(const reco::Candidate &ca
   }
   return isosum;
 }
+
+void heppy::IsolationComputer::updateEvent(const edm::Event* event)
+{
+  if ( event && ( m_lastEvent != event->id() ) ) {
+    edm::Handle<std::vector<pat::PackedCandidate>> packedCandidatesHandle;
+    event->getByToken(m_packedCandidates_token, packedCandidatesHandle);
+    setPackedCandidates(*(packedCandidatesHandle.product()));
+    // TODO if vetoing "any": add all leptons from containers
+    // TODO if vetoing "inclusive": add specifically pre-selected leptons (and for these add the miniIso
+    m_lastEvent = event->id();
+  }
+}

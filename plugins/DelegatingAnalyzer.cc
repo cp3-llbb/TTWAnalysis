@@ -31,9 +31,11 @@ TTWAnalysis::DelegatingAnalyzer::DelegatingAnalyzer(const std::string& name, con
   : Analyzer(name, tree_, config)
   , m_helpers{}
 {
+  LogDebug("ttW") << "Constructing helpers for delegating analyzer " << m_name;
   const edm::ParameterSet& helperConfigs = config.getParameter<edm::ParameterSet>("Helpers");
   for ( const std::string& helperName : helperConfigs.getParameterNames() ) {
     const auto& helperConfig = helperConfigs.getParameter<edm::ParameterSet>(helperName);
+    LogDebug("ttW") << " - " << helperName;
     m_helpers.emplace_back(std::unique_ptr<TTWAnalysis::AnalyzerHelper>{
         TTWAnalyzerHelperFactory::get()->create(
           helperConfig.getParameter<std::string>("type")
@@ -42,6 +44,7 @@ TTWAnalysis::DelegatingAnalyzer::DelegatingAnalyzer(const std::string& name, con
         , helperConfig.getParameter<edm::ParameterSet>("parameters")
         )});
   }
+  LogDebug("ttW") << "Constructed all helpers for delegating analyzer " << m_name;
 }
 
 TTWAnalysis::DelegatingAnalyzer::~DelegatingAnalyzer() {}

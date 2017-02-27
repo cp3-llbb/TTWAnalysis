@@ -1,5 +1,11 @@
 #include "cp3_llbb/TTWAnalysis/interface/DictTool.h"
 
+namespace reco {
+  class Vertex;
+}
+
+EDM_REGISTER_PLUGINFACTORY(TTWAnalysis::DictTool<reco::Vertex>::factory, "TTWVertexDictToolFactory");
+
 namespace pat {
   class Electron;
   class Muon;

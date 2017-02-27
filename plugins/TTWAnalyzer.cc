@@ -1,7 +1,4 @@
 //#include <cp3_llbb/TTWAnalysis/interface/Defines.h>
-// #define _TT_DEBUG_
-#define TT_MTT_DEBUG (false)
-#define TT_HLT_DEBUG (false)
 #include "cp3_llbb/TTWAnalysis/interface/TTWAnalyzer.h"
 #include "cp3_llbb/TTWAnalysis/interface/TTWDileptonCategory.h"
 
@@ -190,14 +187,11 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
 
   m_electrons.clear(); m_muons.clear(); m_leptons.clear(); m_dileptons.clear(); m_jets.clear(); m_dijets.clear(); m_dileptondijets.clear(); m_dileptondijetmets.clear();
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Begin event." << std::endl;
-  #endif
+  LogDebug("ttW") << "Begin event.";
 
   // get the primary vertex
-  edm::Handle<std::vector<reco::Vertex>> vertices_handle;
-  event.getByToken(m_vertices_token, vertices_handle);
-  const reco::Vertex& pv = (*vertices_handle)[0];
+  event.getByToken(m_vertices_token, m_vertices_handle);
+  const reco::Vertex& pv = (*m_vertices_handle)[0];
 
   ///////////////////////////
   //        LEPTONS        //
@@ -205,9 +199,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
 
   m_leptons.clear();
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Electrons" << std::endl;
-  #endif
+  LogDebug("ttW") << "Electrons";
 
   using ElectronsProducer = TTWAnalysis::CandidatesProducer<pat::Electron>;
   m_electrons = producers.get<ElectronsProducer>(m_electrons_producer).selected();
@@ -225,9 +217,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
     }
   }
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Muons" << std::endl;
-  #endif
+  LogDebug("ttW") << "Muons";
 
   using MuonsProducer = TTWAnalysis::CandidatesProducer<pat::Muon>;
   m_muons = producers.get<MuonsProducer>(m_muons_producer).selected();
@@ -259,22 +249,16 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   ///////////////////////////
   //       TRIGGER         //
   ///////////////////////////
-  #ifdef _TT_DEBUG_
-  std::cout << "Trigger" << std::endl;
-  #endif
+  LogDebug("ttW") << "Trigger";
   if (producers.exists("hlt")) {
     const HLTProducer& hlt = producers.get<HLTProducer>("hlt");
     if (hlt.paths.empty()) {
-#if TT_HLT_DEBUG
-      std::cout << "No HLT path triggered for this event. Skipping HLT matching." << std::endl;
-#endif
+      LogDebug("ttW") << "No HLT path triggered for this event. Skipping HLT matching.";
     } else {
-#if TT_HLT_DEBUG
-      std::cout << "HLT path triggered for this event:" << std::endl;
+      LogDebug("ttW") << "HLT path triggered for this event:";
       for (const std::string& path: hlt.paths) {
-        std::cout << "\t" << path << std::endl;
+        LogDebug("ttW") << "\t" << path;
       }
-#endif
       for ( auto& lepton : m_leptons ) {
         lepton.hlt_idx = matchOfflineLepton(lepton, hlt);
       }
@@ -285,9 +269,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   //       DILEPTONS       //
   ///////////////////////////
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Dileptons" << std::endl;
-  #endif
+  LogDebug("ttW") << "Dileptons";
 
   for(uint16_t i1 = 0; i1 < m_leptons.size(); i1++) {
     for(uint16_t i2 = i1 + 1; i2 < m_leptons.size(); i2++) {
@@ -310,9 +292,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   //       JETS            //
   ///////////////////////////
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Jets" << std::endl;
-  #endif
+  LogDebug("ttW") << "Jets";
 
   using JetsProducer = TTWAnalysis::CandidatesProducer<pat::Jet>;
   const auto& jets = producers.get<JetsProducer>(m_jets_producer).selected();
@@ -356,9 +336,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   //       DIJETS          //
   ///////////////////////////
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Dijets" << std::endl;
-  #endif
+  LogDebug("ttW") << "Dijets";
 
   // Next, construct DiJets out of selected jets with selected ID (not accounting for minDRjl here)
   for ( index_t i1{0}; selJets_selID.size() != i1; ++i1 ) {
@@ -397,9 +375,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
   //    EVENT VARIABLES    //
   ///////////////////////////
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Dileptons-dijets" << std::endl;
-  #endif
+  LogDebug("ttW") << "Dileptons-dijets";
 
   // leptons-(b-)jets
   for ( index_t iLL{0}; m_dileptons.size() != iLL; ++iLL ) {
@@ -436,9 +412,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
 
   // leptons-(b-)jets-MET
 
-  #ifdef _TT_DEBUG_
-  std::cout << "Dileptons-Dijets-MET" << std::endl;
-  #endif
+  LogDebug("ttW") << "Dileptons-Dijets-MET";
 
   // Using regular MET
   const myLorentzVector met{producers.get<METProducer>(m_met_producer).p4};
@@ -472,9 +446,7 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
         }));
   }
 
-  #ifdef _TT_DEBUG_
-  std::cout << "End event." << std::endl;
-  #endif
+  LogDebug("ttW") << "End event.";
 }
 
 /**
@@ -483,10 +455,8 @@ void TTWAnalyzer::analyze(const edm::Event& event, const edm::EventSetup& setup,
  */
 TTWAnalysis::sindex_t TTWAnalyzer::matchOfflineLepton( const TTWAnalysis::Lepton& lepton, const HLTProducer& hlt ) const
 {
-#if TT_HLT_DEBUG
-  std::cout << "Trying to match offline lepton: " << std::endl;
-  std::cout << "\tMuon? " << lepton.isMu() << " ; Pt: " << lepton.p4().Pt() << " ; Eta: " << lepton.p4().Eta() << " ; Phi: " << lepton.p4().Phi() << " ; E: " << lepton.p4().E() << std::endl;
-#endif
+  LogDebug("ttW") << "Trying to match offline lepton: ";
+  LogDebug("ttW") << "\tMuon? " << lepton.isMu() << " ; Pt: " << lepton.p4().Pt() << " ; Eta: " << lepton.p4().Eta() << " ; Phi: " << lepton.p4().Phi() << " ; E: " << lepton.p4().E() << std::endl;
 
   float min_dr = std::numeric_limits<float>::max();
 
@@ -503,15 +473,13 @@ TTWAnalysis::sindex_t TTWAnalyzer::matchOfflineLepton( const TTWAnalysis::Lepton
     }
   }
 
-#if TT_HLT_DEBUG
   if (index != -1) {
-    std::cout << "\033[32mMatched with online object:\033[00m" << std::endl;
-    std::cout << "\tPDG Id: " << hlt.object_pdg_id[index] << " ; Pt: " << hlt.object_p4[index].Pt() << " ; Eta: " << hlt.object_p4[index].Eta() << " ; Phi: " << hlt.object_p4[index].Phi() << " ; E: " << hlt.object_p4[index].E() << std::endl;
-    std::cout << "\tΔR: " << min_dr << " ; ΔPt / Pt: " << std::abs(lepton.p4().Pt() - hlt.object_p4[index].Pt()) / lepton.p4().Pt() << std::endl;
+    LogDebug("ttW") << "\033[32mMatched with online object:\033[00m";
+    LogDebug("ttW") << "\tPDG Id: " << hlt.object_pdg_id[index] << " ; Pt: " << hlt.object_p4[index].Pt() << " ; Eta: " << hlt.object_p4[index].Eta() << " ; Phi: " << hlt.object_p4[index].Phi() << " ; E: " << hlt.object_p4[index].E();
+    LogDebug("ttW") << "\tΔR: " << min_dr << " ; ΔPt / Pt: " << std::abs(lepton.p4().Pt() - hlt.object_p4[index].Pt()) / lepton.p4().Pt();
   } else {
-    std::cout << "\033[31mNo match found\033[00m" << std::endl;
+    LogDebug("ttW") << "\033[31mNo match found\033[00m";
   }
-#endif
 
   return index;
 }

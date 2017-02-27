@@ -151,6 +151,7 @@ class TTWAnalyzer: public Framework::Analyzer {
         const std::string m_met_producer;
 
         edm::EDGetTokenT<std::vector<reco::Vertex>> m_vertices_token;
+        edm::Handle<std::vector<reco::Vertex>> m_vertices_handle;
 
         boost::container::flat_map<std::string,TTWAnalysis::ElectronCut> m_elWP;
         boost::container::flat_map<std::string,TTWAnalysis::MuonCut    > m_muWP;
@@ -207,6 +208,7 @@ class TTWAnalyzer: public Framework::Analyzer {
 // TODO move to the boost::any_range version when boost version > 1.57
 //
 //
+template<> inline const std::vector<reco::Vertex>& TTWAnalyzer::getObjList<reco::Vertex>() const { return *m_vertices_handle; }
 template<> inline const edm::PtrVector<pat::Electron>& TTWAnalyzer::getPtrList<pat::Electron>() const { return m_electrons; }
 template<> inline const edm::PtrVector<pat::Muon    >& TTWAnalyzer::getPtrList<pat::Muon    >() const { return m_muons    ; }
 template<> inline const edm::PtrVector<pat::Jet     >& TTWAnalyzer::getPtrList<pat::Jet     >() const { return m_jets     ; }
